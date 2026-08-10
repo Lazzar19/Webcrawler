@@ -2,3 +2,5 @@ node_modules/
 *.log
 data/
 logs/
+
+.idea/
