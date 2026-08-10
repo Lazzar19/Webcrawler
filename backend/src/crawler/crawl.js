@@ -51,7 +51,7 @@ async function crawlPage(baseURL,currentURL,pages, currentDepth = 0 , config) {
 
             
         const crawlPromises = nextURLs.map(url =>
-            limit(() => crawlPage(baseURL, url, pages, currentDepth + 1, maxDepth, maxPages))
+            limit(() => crawlPage(baseURL, url, pages, currentDepth + 1, config))
         );
         await Promise.all(crawlPromises);
         

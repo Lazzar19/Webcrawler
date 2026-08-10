@@ -2,6 +2,10 @@ const { normalize } = require('path');
 const {normalizeURL,getURLs, crawlPage} = require('../src/crawler/crawl.js');
 const {test,expect} = require("@jest/globals");
 
+const { createCrawlConfig } = require("../src/crawler/crawl-config.js");
+const { create } = require('domain');
+
+
 global.fetch = jest.fn();
 
 beforeEach(() => {
@@ -211,7 +215,11 @@ test("cyclic pages ", async () => {
 
     })
 
-    const pages = await crawlPage("https://example.com", 'https://example.com/pageA', {},0,3);
+    const config = createCrawlConfig({
+        maxDepth: 3
+    });
+
+    const pages = await crawlPage("https://example.com", 'https://example.com/pageA', {},0, config);
     expect(pages['example.com/pageA']).toBeDefined();
     expect(pages['example.com/pageB']).toBeDefined();
     expect(pages['example.com/pageA']).toBeGreaterThanOrEqual(1);
@@ -237,7 +245,11 @@ test.each([
         })  
     })
 
-    const pages = await crawlPage('https://example.com', 'https://example.com/file',{},0,3);
+    const config = createCrawlConfig({
+        maxDepth: 3
+    });
+
+    const pages = await crawlPage('https://example.com', 'https://example.com/file',{},0, config);
     expect(pages).toEqual({'example.com/file': 1});
 
 });
@@ -254,7 +266,11 @@ test(' text/html test with charset param', async () => {
         })
     })
 
-    const pages = await crawlPage('https://example.com', 'https://example.com', {}, 0, 3);
+    const config = createCrawlConfig({
+        maxDepth: 3
+    });
+
+    const pages = await crawlPage('https://example.com', 'https://example.com', {}, 0, config);
     expect(pages['example.com']).toBeDefined();
 
 })
@@ -286,7 +302,11 @@ test('ignore external links ', async() => {
         return Promise.reject(new Error('External site, fetch error'));
     })
 
-    const pages = await crawlPage('https://example.com', 'https://example.com', {}, 0, 3);
+    const config = createCrawlConfig({
+        maxDepth: 3
+    });
+
+    const pages = await crawlPage('https://example.com', 'https://example.com', {}, 0, config);
     expect(pages['example.com']).toBeDefined();
     expect(Object.keys(pages).length).toBe(1); // just one page, external link being ignored
 
@@ -313,7 +333,11 @@ test('depth limiting', async () => {
         })
     })
 
-    const pages = await crawlPage('https://example.com', "https://example.com", {}, 0, 1);
+    const config = createCrawlConfig({
+        maxDepth: 1
+    });
+
+    const pages = await crawlPage('https://example.com', "https://example.com", {}, 0, config);
     expect(pages['example.com']).toBeDefined();
     expect(pages['example.com/page2']).toBeUndefined();
     expect(Object.keys(pages).length).toBe(1);
