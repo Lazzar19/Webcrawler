@@ -1,7 +1,15 @@
 {
   "name": "webcrawler",
   "version": "1.0.0",
-  "description": "project for learning http",
+  "description": "Concurrent, robots-aware web crawler written in Node.js",
+  "keywords": [
+    "web crawler",
+    "web-scraping",
+    "nodejs",
+    "concurrency",
+    "http"
+  ],
+
   "main": "main.js",
   "scripts": {
     "start": "node main.js",
