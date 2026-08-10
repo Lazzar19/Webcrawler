@@ -1,6 +1,7 @@
-const { crawlPage } = require("./crawler/crawler.js")
+const { crawlPage } = require("./crawler/crawl.js")
 const { printReport } = require("./crawler/report.js")
 const { createCrawlConfig } = require("./crawler/crawl-config.js")
+
 async function main() {
 
     if(process.argv.length < 3) {

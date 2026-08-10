@@ -1,6 +1,6 @@
 
 
-const DEFUALT_CONFIG = {
+const DEFAULT_CONFIG = {
     maxDepth: 3,
     maxPages: Infinity,
     concurrency: 5
@@ -10,16 +10,16 @@ const DEFUALT_CONFIG = {
 function createCrawlConfig(options = {}) {
 
     const config = {
-        ...DEFUALT_CONFIG,
+        ...DEFAULT_CONFIG,
         ...options
     }
 
     if(!Number.isInteger(config.maxDepth) || config.maxDepth < 0) {
-        throw new Error("Invalid maxDepth. Please provide a positive integer.");
+        throw new Error("Invalid maxDepth. Please provide a non-negative integer.");
     }
 
-    if(!Number.isInteger(config.maxPages) || config.maxPages < 0) {
-        throw new Error("Invalid maxPages. Please provide a positive integer.");
+    if(config.maxPages != Infinity && (!Number.isInteger(config.maxPages) || config.maxPages <= 0)) {
+        throw new Error("Invalid maxPages. Please provide a positive integer or Infinity.");
     }
 
     if(!Number.isInteger(config.concurrency) || config.concurrency <= 0) {
