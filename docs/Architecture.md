@@ -1,5 +1,7 @@
 # Webcrawler — Architecture v1
 
+Scope, milestone order, and crawler behavior are decided in [PLAN.md](../PLAN.md). This document only describes component boundaries. The directory tree in section 4 is not the repository layout. Section 27 is not a roadmap.
+
 ## 1. Purpose
 
 Webcrawler is a configurable command-line web crawling and website analysis tool built with Node.js.
@@ -174,11 +176,7 @@ webcrawler/
 └── README.md
 ```
 
-This is the target structure.
-
-It should NOT be created all at once.
-
-Components will be introduced incrementally during the refactoring phases.
+This tree is a sketch of responsibilities from an earlier draft. The repository layout and the order of work are in [PLAN.md](../PLAN.md). Code stays under `backend/`.
 
 ---
 
@@ -645,7 +643,7 @@ Tabular page-level data.
 
 Interactive human-readable crawl report.
 
-The HTML reporter is expected to become the primary showcase feature of the project.
+Console, JSON, and CSV are the reporters in scope. An HTML reporter is not part of the current plan.
 
 ---
 
@@ -1030,86 +1028,9 @@ The goal of v1 is a high-quality single-process crawler.
 
 ---
 
-# 27. Implementation Roadmap
+# 27. Implementation order
 
-## Phase 1 — Core architecture
-
-* [ ] Define `CrawlConfig`
-* [ ] Define `PageResult`
-* [ ] Define `CrawlResult`
-* [ ] Extract URL Manager
-* [ ] Extract HTML Parser
-* [ ] Extract Scheduler
-* [ ] Create Crawler orchestrator
-* [ ] Preserve current behavior
-
-## Phase 2 — HTTP layer
-
-* [ ] Create `HttpClient`
-* [ ] Add timeout
-* [ ] Add User-Agent
-* [ ] Handle response metadata
-* [ ] Add retry strategy
-* [ ] Add exponential backoff
-
-## Phase 3 — Robots
-
-* [ ] Create `RobotsManager`
-* [ ] Integrate robots checks into crawler
-* [ ] Respect crawl-delay
-* [ ] Expose sitemap URLs
-* [ ] Test real crawling decisions
-
-## Phase 4 — CLI
-
-* [ ] Replace raw `process.argv`
-* [ ] Add `--help`
-* [ ] Add `--depth`
-* [ ] Add `--max-pages`
-* [ ] Add `--concurrency`
-* [ ] Add `--timeout`
-* [ ] Add `--user-agent`
-* [ ] Add `--format`
-* [ ] Add `--output`
-
-## Phase 5 — Reporting
-
-* [ ] Console reporter
-* [ ] JSON reporter
-* [ ] CSV reporter
-* [ ] HTML reporter
-* [ ] Crawl statistics
-
-## Phase 6 — Quality
-
-* [ ] Unit test coverage
-* [ ] Integration test server
-* [ ] ESLint
-* [ ] Prettier
-* [ ] GitHub Actions
-* [ ] Coverage reporting
-
-## Phase 7 — Advanced features
-
-* [ ] Broken link detection
-* [ ] Sitemap support
-* [ ] Response-time analysis
-* [ ] Graceful shutdown
-* [ ] Crawl graph
-* [ ] Persistent crawl state
-
-## Phase 8 — Portfolio polish
-
-* [ ] Architecture documentation
-* [ ] Updated README
-* [ ] Architecture diagram
-* [ ] Example reports
-* [ ] Benchmarks
-* [ ] Design decisions
-* [ ] Known limitations
-* [ ] Demo video/GIF
-
-````
+Milestone order, the CV cutoff, and the frozen work live in [PLAN.md](../PLAN.md). Do not add a second checklist here.
 
 ---
 
