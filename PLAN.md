@@ -27,9 +27,10 @@ Milestones 0 through 4 are the portfolio. Milestone 5 (a single Docker image) is
 
 Each theme below is the same problem in C++, Rust, and Go. The JavaScript syntax is incidental.
 
-- URL identity and deduplication
-- A work queue, a fixed set of workers, and reservation at enqueue time
+- URL identity, redirect aliases, and deduplication
+- A work queue, a fixed set of workers, reservation at enqueue time, and stable link order
 - Backpressure and crawl limits
+- Politeness as its own limit, separate from how many requests may be in flight
 - Timeouts, bounded retries, and failure isolation
 - Robots policy and per-origin delay
 - A thin CLI over a library-shaped engine
@@ -39,8 +40,8 @@ Each theme below is the same problem in C++, Rust, and Go. The JavaScript syntax
 
 LLM-written code is allowed. A milestone is not done until the author can explain the checkpoint without reading the code.
 
-- Milestone 1: the author writes the URL equivalence tests and the worker-loop sketch before implementation. The author implements the queue and worker loop by hand.
-- Milestone 2: the author writes the robots decision table (allow, disallow, missing file, fetch failure) before wiring the library.
+- Milestone 1: the author writes the URL equivalence tests, including redirect aliases, and the worker-loop sketch before implementation. The author implements the queue and worker loop by hand.
+- Milestone 2: the author writes the robots decision table (allow, disallow, missing file, fetch failure) and the politeness cases (global cap, per-origin cap, minimum gap, crawl-delay) before wiring the library.
 - Milestone 4: the author writes the "Design decisions" and "Known limitations" sections of the README.
 
 ## Cemented Behavior
@@ -57,6 +58,14 @@ The canonical key is produced by the WHATWG URL parser.
 - Keep the path. `https://host` and `https://host/` are the same key. A trailing slash on any longer path is removed.
 - Keep the query. Sort parameters by name, then by value, so parameter order does not create two keys. A missing query and an empty query are the same key.
 - Scheme, hostname, and port stay in the key. `http` and `https` are different. `www` is not stripped. Different query values are different keys.
+
+A redirect is the same identity problem after the response arrives.
+
+- Read the final URL from the response. Canonicalize it with the same rules.
+- If the final key matches the reserved key, parse links from that response.
+- If the final key is new, add it to the seen set so a later link does not fetch it again. That insert does not consume another `maxPages` slot. Parse links against the final URL.
+- If the final key is already reserved, keep this page as `ok`, record the final URL, and do not parse links. The earlier reservation owns that page.
+- If the final URL leaves the start origin, mark this page `skipped` with reason `redirect-off-origin` and do not parse links.
 
 ### Scope and link resolution
 
@@ -78,6 +87,8 @@ The canonical key is produced by the WHATWG URL parser.
 | `maxDepth` | `2` |
 | `maxPages` | `50` |
 | `concurrency` | `5` |
+| `perOriginLimit` | `2` |
+| `minIntervalMs` | `200` |
 | `timeoutMs` | `10000` |
 | `maxResponseBytes` | `1000000` |
 | `retryCount` | `2` extra attempts after the first failure |
@@ -95,14 +106,29 @@ One crawl owns one queue and `concurrency` workers.
 - The first reservation wins. A later discovery of the same key is ignored.
 - The limiter is per crawl. There is no process-global pool.
 - The queue stops growing once `maxPages` URLs are reserved or no in-scope links remain inside `maxDepth`.
+- The queue is FIFO, so the crawl is breadth-first. Before enqueue, sort that page's links by canonical key. The same responses then reserve URLs in the same order on every run.
+- The start URL has no parent. Every later record stores `discoveredFrom`, the canonical URL of the page whose links reserved it.
 
 This replaces the current recursive `p-limit` call. That call holds a slot across the subtree and can stall when every in-flight page is waiting on a child.
+
+### Politeness
+
+`concurrency` and politeness are different limits. Effective pace is whichever limit is tighter.
+
+- `concurrency` caps in-flight requests for the whole crawl.
+- `perOriginLimit` caps in-flight requests to one origin. The default is `2`.
+- `minIntervalMs` is the minimum gap between the start of two requests to the same origin. The default is `200`. Tests and the CLI may set it to `0`.
+- A robots `Crawl-delay` larger than `minIntervalMs` replaces that gap for that origin. The cap remains 10 seconds.
+- A worker waits for both a free global slot and a free origin slot, then waits out the gap. `waitedMs` on the page is that wait. The wait happens before fetch, and the worker does not hold the slot across its children.
+- On a single-origin crawl, `perOriginLimit` is the limit you can see. `concurrency` still matters as the ceiling once more than one origin is allowed.
+
+Milestone 1 leaves a gate in front of fetch that allows the request immediately. Milestone 2 gives that gate the limits above.
 
 ### Page states
 
 `queued`, `fetching`, `ok`, `skipped`, `failed`.
 
-Skip reasons: `other-origin`, `depth-limit`, `page-limit`, `duplicate`, `robots`, `non-html`.
+Skip reasons: `other-origin`, `redirect-off-origin`, `depth-limit`, `page-limit`, `duplicate`, `robots`, `non-html`.
 
 A skipped or failed URL is a record in the result. It is not a successful page. The old `pages` map that stored a hit count is retired. Inbound link counts are out of scope.
 
@@ -127,7 +153,7 @@ Use the `robots-parser` dependency for allow/disallow decisions. Do not keep a s
 - Check robots before each fetch. Cache one parsed `robots.txt` per origin.
 - `404` on `robots.txt` means the origin is allowed.
 - A network failure or a `5xx` while fetching `robots.txt` skips that origin's remaining URLs with reason `robots`. Record the cause. This is fail-closed.
-- Honor `Crawl-delay` for the configured user agent, capped at 10 seconds, so a hostile file cannot stall the process forever.
+- Honor `Crawl-delay` for the configured user agent, capped at 10 seconds, so a hostile file cannot stall the process forever. When that delay is larger than `minIntervalMs`, it becomes the gap for that origin.
 - Sitemap URLs may be read and ignored. Sitemap crawling is out of scope.
 
 ### Output and shutdown
@@ -139,7 +165,7 @@ Use the `robots-parser` dependency for allow/disallow decisions. Do not keep a s
 
 ### Result shapes
 
-`PageResult` is one URL: canonical URL, requested URL, final URL after redirects, depth, state, skip reason, status code, content type, duration, byte length, and error class. No report-only fields.
+`PageResult` is one URL: canonical URL, requested URL, final URL after redirects, `discoveredFrom`, depth, state, skip reason, `waitedMs`, status code, content type, duration, byte length, and error class. `discoveredFrom` is null for the start URL. No report-only fields.
 
 `CrawlResult` is the crawl: start URL, start time, finish time, duration, the page records, and counts for queued, fetched, ok, skipped, and failed.
 
@@ -202,9 +228,12 @@ Author checkpoint first: write the equivalence tests and a short worker-loop ske
 - `[ ]` Implement the canonical key in the Cemented Behavior section. Test scheme, port, `www`, fragment, trailing slash, and query order.
 - `[ ]` Replace recursive `p-limit` with one queue and N workers for this crawl.
 - `[ ]` Reserve a URL when it enters the queue. Ignore later duplicates.
-- `[ ]` Apply inclusive `maxDepth` and reservation-based `maxPages`. Change the default page limit from `Infinity` to `50`.
+- `[ ]` Sort each page's links by canonical key before enqueue, and keep the queue FIFO.
+- `[ ]` After a redirect, apply the final-key rules in Cemented Behavior. Record requested URL, final URL, and `discoveredFrom`.
+- `[ ]` Call the politeness gate before each fetch. In this milestone the gate allows the request immediately.
+- `[ ]` Apply inclusive `maxDepth` and reservation-based `maxPages`. Change the default page limit from `Infinity` to `50`. A redirect alias does not consume a second page slot.
 - `[ ]` Return `PageResult` and `CrawlResult` values. Retire the hit-count map.
-- `[ ]` Add a local HTTP server test for depth, page limit, cycles, duplicates, and a crawl that would have stalled the old limiter.
+- `[ ]` Add a local HTTP server test for depth, page limit, cycles, duplicates, stable order, a redirect alias, an off-origin redirect, and a crawl that would have stalled the old limiter.
 
 **Done when:** those tests pass against the local server, and the author can redraw the queue without opening the file.
 
@@ -218,16 +247,17 @@ Author checkpoint first: write the robots decision table in the learning log.
 - `[ ]` Classify page failures and keep going.
 - `[ ]` Retry only the transient cases listed above, on the same reservation.
 - `[ ]` Enforce `robots-parser` before fetch, with a per-origin cache, 404-allows, fail-closed on fetch failure, and a capped crawl-delay.
+- `[ ]` Apply `perOriginLimit` and `minIntervalMs`. Let a larger crawl-delay replace the gap, still capped at 10 seconds. Record `waitedMs`.
 - `[ ]` Delete the custom robots parser after the new tests cover the decision table.
-- `[ ]` Extend the local server fixture with a disallowed path, a missing `robots.txt`, and a slow response that hits the timeout.
+- `[ ]` Extend the local server fixture with a disallowed path, a missing `robots.txt`, a slow response that hits the timeout, and a same-origin run whose in-flight count stays within `perOriginLimit`.
 
-**Done when:** a disallowed path is never fetched, and a timeout becomes a failed `PageResult` rather than a hung process.
+**Done when:** a disallowed path is never fetched, a timeout becomes a failed `PageResult` rather than a hung process, and a same-origin run never has more than `perOriginLimit` requests in flight.
 
 ### Milestone 3 - CLI and reports
 
 **Goal:** The CLI is a thin adapter. Scripts can depend on the exit code and the JSON shape.
 
-- `[ ]` Accept a positional URL plus `--depth`, `--max-pages`, `--concurrency`, `--timeout`, `--user-agent`, `--respect-robots`, `--format`, and `--output`.
+- `[ ]` Accept a positional URL plus `--depth`, `--max-pages`, `--concurrency`, `--per-origin`, `--min-interval`, `--timeout`, `--user-agent`, `--respect-robots`, `--format`, and `--output`.
 - `[ ]` Validate the URL and every number. Preserve an explicit `0` for depth.
 - `[ ]` Use exit codes `0`, `1`, and `2` as specified above.
 - `[ ]` Emit console, JSON, and CSV from `CrawlResult`. CSV escapes commas, quotes, and newlines.
@@ -241,7 +271,7 @@ Author checkpoint first: write the robots decision table in the learning log.
 
 **Goal:** The README can stand next to the code in a portfolio review.
 
-- `[ ]` Document the queue, the URL policy, the failure model, and the defaults.
+- `[ ]` Document the queue, stable order, redirect identity, the politeness split, the failure model, and the defaults.
 - `[ ]` Include one copy-paste demo against the local fixture and one sample JSON report.
 - `[ ]` List known limitations: no JavaScript rendering, no subdomain crawl, no sitemap crawl, no resume, single process.
 - `[ ]` Author writes the design-decisions and limitations sections.
@@ -268,7 +298,7 @@ Not in this plan, and not a follow-up milestone until the CV cutoff is done and 
 - HTTP API, job service, OpenAPI, SSRF surface
 - HTML report as the showcase
 - Release automation, npm publish, image registries
-- Sitemap crawling, SEO extraction, crawl graphs, persistent resume, SQLite
+- Sitemap crawling, SEO extraction, a drawn crawl graph, persistent resume, SQLite
 - Distributed workers, browser automation, cookie auth, proxy rotation
 
 Broken-link detection is already implied by failed `PageResult` records. It does not need a separate feature.
@@ -339,10 +369,18 @@ Add a file when a boundary above is being violated. Do not add a file only to ma
 - **How it was verified:** `npm test` from the repository root.
 - **Lesson learned:** A baseline change removes files the product does not run. It does not change crawl behavior.
 
+### 2026-10-07 - Trace, redirect identity, and politeness
+
+- **Problem:** The plan could fetch one page twice after a redirect, could emit different orders on the same site, and used one number for both speed and politeness.
+- **Chosen solution:** A redirect's final URL re-enters the seen set. Links are sorted before enqueue. `concurrency` caps in-flight work, and `perOriginLimit` plus `minIntervalMs` pace one origin. Each page records `discoveredFrom` and `waitedMs`.
+- **How it was verified:** The decisions are written into Cemented Behavior and into Milestones 1 and 2. Implementation is still ahead.
+- **Lesson learned:** The trace of a crawl is the portfolio feature. A second product, such as a sitemap crawler or a drawn graph, can wait.
+
 ## Change Log
 
 ### 2026-10-07
 
+- Recorded redirect identity, stable link order, per-origin politeness, and `discoveredFrom` as part of the existing milestones.
 - Removed the duplicate root crawler and the unused Vite app.
 - Pointed `npm start` at `backend/src/main.js`.
 - Made root verification and GitHub Actions run the backend tests only.
