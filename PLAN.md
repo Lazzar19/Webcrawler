@@ -13,7 +13,7 @@ This is the only execution plan for the project. Update it together with impleme
 
 ## Project Goal
 
-Build a single-process command-line crawler that is correct enough to show on a CV: bounded concurrency, an explicit URL policy, robots and timeouts, a tested crawl of a local site, and an honest README.
+Build a single-process command-line crawler that is correct enough to show: bounded concurrency, an explicit URL policy, robots and timeouts, a tested crawl of a local site, and an honest README.
 
 The crawler engine and the CLI are the product. Node.js is the implementation language for this repository. The design should transfer to a later crawler or worker pool in C++, Rust, or Go. Those languages get their own projects. This repository does not grow into a JavaScript platform.
 
@@ -158,14 +158,16 @@ Names can differ. Responsibilities cannot: the CLI does not crawl, the HTTP clie
 
 ## Current Status
 
-**Active milestone:** Milestone 0 - Repository baseline
+**Active milestone:** Milestone 1 - Queue, workers, and URL policy
 
 **Known behavior of the code today:**
 
 - `[x]` A recursive crawler, config validation, a custom robots parser, and a console/CSV report exist under `backend/`.
 - `[x]` Jest covers normalization happy paths, some HTML extraction, cycles, config validation, robots parsing, and sort order. The suite has 61 tests.
-- `[x]` Root `npm test` and `npm run verify` delegate into `backend/` and `frontend/`.
-- `[x]` GitHub Actions runs backend tests plus frontend lint and build.
+- `[x]` Root `npm test` and `npm run verify` run the backend suite only.
+- `[x]` GitHub Actions installs `backend/` and runs `npm test` on the Node version in `backend/.nvmrc`.
+- `[x]` `npm start` from `backend/` runs `src/main.js`.
+- `[x]` The duplicate root crawler and the Vite starter are gone.
 - `[!]` `config.concurrency` is ignored. A module-level `p-limit(5)` wraps recursive calls and can stall the crawl once in-flight pages wait on their own children.
 - `[!]` `maxPages` records a URL and then skips the fetch when the count is already at the limit. The default is `Infinity`.
 - `[!]` Depth `0` is rejected by `parseInt(...) || 2` in the CLI. URLs past the depth limit are not reserved.
@@ -174,9 +176,6 @@ Names can differ. Responsibilities cannot: the CLI does not crawl, the HTTP clie
 - `[!]` Page fetches have no timeout, no User-Agent, and no size cap.
 - `[!]` Robots rules are never consulted. `robots-parser` is installed and unused. The custom parser does not decide whether a path is allowed.
 - `[!]` The report writes a CSV onto a guessed Desktop path, including a Windows path when run from WSL. `sortPages` assigns undeclared variables.
-- `[!]` `backend/package.json` `start` points at `main.js`, while the entry file is `backend/src/main.js`.
-- `[!]` [src/crawler/crawl.js](src/crawler/crawl.js) is an older copy of the engine and is not the file the CLI loads.
-- `[!]` [frontend/](frontend/) is an unmodified Vite starter. It is not part of the product, and CI still builds it.
 
 ## Milestones
 
@@ -186,10 +185,10 @@ Names can differ. Responsibilities cannot: the CLI does not crawl, the HTTP clie
 
 - `[x]` Root workspace commands and a GitHub Actions workflow exist.
 - `[x]` README describes the `backend/` layout and points at this plan.
-- `[ ]` Delete [src/crawler/crawl.js](src/crawler/crawl.js).
-- `[ ]` Point `backend` `start` at `backend/src/main.js`.
-- `[ ]` Remove the frontend from `npm run verify` and from CI. Delete [frontend/](frontend/) in the same change.
-- `[ ]` State in the README that the frontend is gone and that the behavior bugs above are still open.
+- `[x]` Delete the duplicate root `src/crawler/crawl.js`.
+- `[x]` Point `backend` `start` at `backend/src/main.js`.
+- `[x]` Remove the frontend from `npm run verify` and from CI. Delete `frontend/` in the same change.
+- `[x]` State in the README that the frontend is gone and that the behavior bugs above are still open.
 
 **Done when:** clone, install `backend`, and `npm test` are the whole setup, and only one crawler file exists.
 
@@ -283,7 +282,7 @@ Broken-link detection is already implied by failed `PageResult` records. It does
 | CI | GitHub Actions on `main` and pull requests | Same test command, Node from `backend/.nvmrc` |
 | Image | `docker build` then the README demo | Only after Milestone 5 |
 
-`npm run verify` becomes `npm test` once the frontend is gone. CI installs `backend` only.
+`npm run verify` runs `npm test`. CI installs `backend` only.
 
 ## Definition of Done
 
@@ -333,7 +332,20 @@ Add a file when a boundary above is being violated. Do not add a file only to ma
 - **How it was verified:** Architecture.md now points here for order and scope.
 - **Lesson learned:** A portfolio crawler is the engine contract and the README. A second interface does not make the engine more correct.
 
+### 2026-10-07 - Repository baseline
+
+- **Problem:** The repo offered two crawlers and a Vite starter that no command in the product used. `npm start` pointed at a missing `main.js`.
+- **Chosen solution:** Keep `backend/` as the only package. Root `npm test` and CI run that suite. The README lists the engine bugs that Milestone 1 still has to replace.
+- **How it was verified:** `npm test` from the repository root.
+- **Lesson learned:** A baseline change removes files the product does not run. It does not change crawl behavior.
+
 ## Change Log
+
+### 2026-10-07
+
+- Removed the duplicate root crawler and the unused Vite app.
+- Pointed `npm start` at `backend/src/main.js`.
+- Made root verification and GitHub Actions run the backend tests only.
 
 ### 2026-10-06
 

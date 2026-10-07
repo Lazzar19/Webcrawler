@@ -10,9 +10,9 @@
     "http"
   ],
 
-  "main": "main.js",
+  "main": "src/main.js",
   "scripts": {
-    "start": "node main.js",
+    "start": "node src/main.js",
     "test": "jest"
   },
   "repository": {
@@ -25,7 +25,6 @@
     "url": "https://github.com/Lazzar19/webcrawler/issues"
   },
   "homepage": "https://github.com/Lazzar19/webcrawler#readme",
-  "keywords": [],
   "devDependencies": {
     "jest": "^29.7.0"
   },

@@ -5,10 +5,8 @@
   "description": "Workspace commands for the Webcrawler project",
   "scripts": {
     "test": "npm --prefix backend test",
-    "test:backend": "npm --prefix backend test",
-    "lint:frontend": "npm --prefix frontend run lint",
-    "build:frontend": "npm --prefix frontend run build",
-    "verify": "npm run test:backend && npm run lint:frontend && npm run build:frontend"
+    "start": "npm --prefix backend start",
+    "verify": "npm test"
   },
   "engines": {
     "node": ">=18"

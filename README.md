@@ -1,6 +1,6 @@
 # Web Crawler
 
-A command-line web crawler built in **Node.js** that recursively traverses same-host hyperlinks and produces crawl reports. The CLI is the primary product; the React frontend is reserved for a later milestone.
+A command-line web crawler built in **Node.js**. It traverses same-host links and prints a crawl report. The CLI is the whole product. There is no web UI in this repository.
 
 ![Node.js](https://img.shields.io/badge/Node.js-18.7.0-green?style=flat&logo=node.js)
 ![JavaScript](https://img.shields.io/badge/JavaScript-ES2022-yellow?style=flat&logo=javascript)
@@ -9,70 +9,70 @@ A command-line web crawler built in **Node.js** that recursively traverses same-
 
 ## About
 
-Built as a hands-on project for learning how HTTP, scheduling and system design work under the hood. The crawler currently provides the initial crawling engine and test suite. Features described as planned are tracked in [PLAN.md](PLAN.md).
+This is a hands-on project for learning HTTP, scheduling, and the limits of a single-process crawler. The engine and the test suite are real. Several behaviors are still wrong. The contract they should meet is in [PLAN.md](PLAN.md).
 
-## Features
+## What works today
 
-- Recursive link traversal with depth and page-limit configuration
-- Same-host URL filtering and visited URL tracking
-- Controlled asynchronous page fetching
-- Initial `robots.txt` parsing module
-- Jest test suite with mocked network requests
+- Recursive link traversal with a depth setting and a page-limit setting
+- Same-host filtering and a visited-URL map
+- A fixed pool of five in-flight fetches
+- A `robots.txt` parser that the crawl does not call yet
+- Jest tests that mock the network
 
-The crawler is under active development. Robots enforcement, fully configurable concurrency, robust URL resolution, retries, timeout handling, CI/CD and Docker are planned milestones, not yet complete features.
+## Still open
 
-## Project Structure
+These are known gaps, not future ideas. Milestone 1 replaces the crawl loop instead of patching it in place.
+
+- Concurrency is hard-coded. `config.concurrency` is ignored, and the recursive limiter can stall.
+- `maxPages` defaults to unlimited, and the current check can record a URL without fetching it.
+- URL identity drops the scheme, port, and query. Relative links are joined by string concatenation.
+- The result map mixes visited pages, failures, and repeat counts.
+- Page fetches have no timeout, no User-Agent, and no size cap.
+- `robots.txt` is not enforced. The installed `robots-parser` package is unused.
+- The CSV report is written to a guessed Desktop path.
+
+## Project structure
 
 ```
 webcrawler/
-├── backend/       # CLI and crawler engine
+├── backend/        # CLI and crawler engine
 │   ├── src/
 │   └── tests/
-├── frontend/      # React/Vite frontend reserved for a later milestone
-├── docs/           # Architecture documentation
-├── PLAN.md        # Development tracker and learning roadmap
-└── package.json   # Root workspace commands
+├── docs/           # Component boundaries. PLAN.md is the roadmap.
+├── PLAN.md
+└── package.json    # Root commands that delegate to backend/
 ```
 
-## Getting Started
+## Getting started
 
 ### Prerequisites
 
-- Node.js `18.7.0` (use [nvm](https://github.com/nvm-sh/nvm) for version management)
+- Node.js `18.7.0`, listed in `backend/.nvmrc`
 
 ```bash
-nvm use   # automatically picks up .nvmrc
+cd backend
+nvm use
 ```
 
-### Install
+### Install and test
 
 ```bash
-git clone https://github.com/Lazzar19/webcrawler.git
-cd webcrawler
 npm install --prefix backend
-npm install --prefix frontend
+npm test
 ```
+
+`npm test` from the repository root runs the backend Jest suite. `npm run verify` is the same command.
 
 ### Run
-
 
 ```bash
 node backend/src/main.js <url>
 ```
 
-The root workspace also exposes the main verification commands:
+From `backend/`:
 
 ```bash
-npm test                 # backend tests
-npm run lint:frontend    # frontend lint
-npm run build:frontend   # frontend production build
-npm run verify           # all checks above
-```
-
-### Tests
-
-```bash
-cd backend && npm test
+npm start -- <url>
 ```
 
 ## Dependencies
@@ -80,8 +80,8 @@ cd backend && npm test
 | Package | Purpose |
 |---|---|
 | `jsdom` | HTML parsing and link extraction |
-| `p-limit` | Concurrency limiter for async requests |
-| `robots-parser` | Parses `robots.txt` rules; enforcement is being integrated |
+| `p-limit` | Concurrency limiter for async requests. The current crawl can stall under it. |
+| `robots-parser` | Installed for later robots enforcement. The crawl does not call it yet. |
 | `jest` | Testing framework (dev dependency) |
 
 ## Author
