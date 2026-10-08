@@ -14,7 +14,7 @@ class RobotsHandler {
     try {
        baseURL = new URL(siteURL).origin; // e.g., https://example.com
       
-    } catch(err) {
+    } catch {
       console.log(`Malformed url: ${siteURL} `)
       return '';
     }

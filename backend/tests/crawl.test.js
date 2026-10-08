@@ -1,9 +1,7 @@
-const { normalize } = require('path');
 const {normalizeURL,getURLs, crawlPage} = require('../src/crawler/crawl.js');
 const {test,expect} = require("@jest/globals");
 
 const { createCrawlConfig } = require("../src/crawler/crawl-config.js");
-const { create } = require('domain');
 
 
 global.fetch = jest.fn();

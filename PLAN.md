@@ -404,9 +404,9 @@ Integration tests use a real server, not a `fetch` mock.
 **Known behavior of the code today:**
 
 - `[x]` A recursive crawler, config validation, a custom robots parser, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers normalization happy paths, some HTML extraction, cycles, config validation, robots parsing, and sort order. The suite has 61 tests.
-- `[x]` Root `npm test` and `npm run verify` run the backend suite only.
-- `[x]` GitHub Actions installs `backend/` and runs `npm test` on the Node version in `backend/.nvmrc`.
+- `[x]` Jest covers normalization happy paths, some HTML extraction, cycles, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 114 tests.
+- `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
+- `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
 - `[x]` `npm start` from `backend/` runs `src/main.js`.
 - `[x]` The duplicate root crawler and the Vite starter are gone.
 - `[!]` `config.concurrency` is ignored. A module-level `p-limit(5)` wraps recursive calls. A parent holds its slot while awaiting children queued behind it. With five or more same-host links on the start page and the CLI default depth, all slots wait on queued work, nothing keeps the event loop alive, and the process exits silently without a report.
@@ -418,7 +418,7 @@ Integration tests use a real server, not a `fetch` mock.
 - `[!]` Page fetches have no timeout, no User-Agent, and no size cap. An invalid start URL throws outside any handler.
 - `[!]` Robots rules are never consulted. `robots-parser` is installed and unused. The custom parser does not decide whether a path is allowed.
 - `[!]` The report writes a CSV onto a guessed Desktop path, including a Windows path when run from WSL. The macOS branch is unreachable. `sortPages` assigns undeclared variables.
-- `[!]` Node is pinned to `18.7.0`, and there is no linter.
+- `[x]` Node is pinned to 24, and ESLint checks `backend/`.
 
 ## Milestones
 
@@ -443,9 +443,9 @@ Checkpoint first: the agent writes the equivalence tests and the worker-loop ske
 
 Setup:
 
-- `[ ]` Move to Node 24 LTS as described in Toolchain. Add ESLint and `npm run lint` (root and `backend/`). Make root `npm run verify` run lint then tests, and run lint in CI. Fix the existing lint findings.
-- `[ ]` Add the fixture server with request logging and peak-concurrency tracking.
-- `[ ]` Add the injected `clock` and `logger` with real defaults.
+- `[x]` Move to Node 24 LTS as described in Toolchain. Add ESLint and `npm run lint` (root and `backend/`). Make root `npm run verify` run lint then tests, and run lint in CI. Fix the existing lint findings.
+- `[x]` Add the fixture server with request logging and peak-concurrency tracking.
+- `[x]` Add the injected `clock` and `logger` with real defaults.
 
 URL policy:
 
@@ -648,9 +648,9 @@ Add a file when a boundary above is being violated. Do not add a file only to ma
 - **How it was verified:** Plan review only. Implementation is still ahead.
 - **Lesson learned:** "Deterministic" is a claim about concurrency, not about sorting. It needs a mechanism.
 
-### 2026-10-08 - Milestone 1 checkpoint, awaiting approval
+### 2026-10-08 - Milestone 1 checkpoint
 
-Not approved. No frontier, worker loop, or URL policy is implemented. The author reviews this entry and [backend/tests/url-identity.test.js](backend/tests/url-identity.test.js) before any of that work starts.
+Approved: 2026-10-08. Frontier work and the URL policy start after Setup. Neither is implemented yet.
 
 - **Problem:** The crawl still identifies a page by host plus path, joins links by string concatenation, and reserves work by finishing a recursive call. Concurrent finishes would not be stable even after the links on one page are sorted.
 - **Chosen solution:** Lock the canonical key with tests, and describe the worker loop in plain language before any of that code exists. `canonicalKey` returns the sentinel `NOT-IMPLEMENTED`, so each assertion runs and fails. The tests are `test.failing` so the current suite stays green. They become normal tests in the same change that implements the key.
@@ -659,7 +659,7 @@ Not approved. No frontier, worker loop, or URL policy is implemented. The author
 
 ### 2026-10-08 - Checkpoint correction
 
-Not approved. Still no production crawler, frontier, or URL policy.
+Included in the Milestone 1 checkpoint approved on 2026-10-08. Still no production crawler, frontier, or URL policy.
 
 - **Problem:** The checkpoint left robots, fatal-stop, trailing slashes, scheme-specific ports, query ordering, userinfo, and the fetched spelling for an agent to guess.
 - **Chosen solution:** Milestone 1 keeps the robots call and implements it as an allow-all stand-in. Normal termination resolves pending `take()` with `null` only when the queue is empty and every taken item is committed. Fatal-stop resolves those same waits with `null` and rejects with the original exception. The key removes repeated trailing slashes but not internal empty segments, omits `80` only for `http` and `443` only for `https`, sorts query pairs by code-unit order, and uses `URLSearchParams` without a further decode step. A discovered link with userinfo is ignored. The request uses the first reserved spelling.
@@ -668,12 +668,12 @@ Not approved. Still no production crawler, frontier, or URL policy.
 
 ### 2026-10-08 - Second checkpoint correction
 
-Not approved.
+Included in the Milestone 1 checkpoint approved on 2026-10-08.
 
 - **Problem:** A second review found two keys that broke idempotence (`?&`, and a non-`http(s)` redirect hop reaching `canonicalKey`), wording that said percent-escapes stay distinct in the query, an unspecified `crawl()` signature, fatal-stop gaps (`Promise.all`, reservation while stopping, which exception wins), a vacuous userinfo assertion, and three errors in the retired-test list.
 - **Chosen solution:** Cemented Behavior now settles each point. See the change log entry of the same date.
 - **How it was verified:** Each canonicalization rule was checked against Node's `URL` and `URLSearchParams` with a reference implementation that was not committed. Node's `fetch` refuses URLs that contain credentials, so "`/secret` was never requested" cannot fail for an implementation that tries to fetch it.
-- **Pending before approval:** the two checkpoint test files still need the matching edits. Add a query percent-escape case and a `?&` case to `url-identity.test.js`. Assert in `fetch-spelling.test.js` that the userinfo crawl has only the start record. Add the reversed-order spelling test.
+- **Resolved before approval:** `url-identity.test.js` has the query percent-escape case and the `?&` case. `fetch-spelling.test.js` asserts that the userinfo crawl has only the start record, and it has the reversed-order spelling test.
 - **Lesson learned:** A rule that is correct for one URL component, such as "do not decode", is wrong when written as a rule for the whole URL.
 
 #### Retired behavior still locked by old tests
@@ -727,7 +727,20 @@ If reservation followed network completion, `C` would reserve `/x` at 10ms. `dis
 
 The same example shows termination. After `S` is taken, the queue is empty and `S` has not committed. The crawl is not over. Ending there would drop `B` and `C`. After `C` is in the buffer and `B` has not committed, the queue is empty again. The crawl is still not over. `B` must commit before `C` can reserve, and `B`'s commit is what creates `/x`.
 
+### 2026-10-08 - Milestone 1 setup
+
+- **Problem:** The crawl rewrite needed a current Node pin, a linter that sees today's undeclared variables, a real local server for later engine tests, and a clock and logger the engine can receive instead of calling `Date` and `console` itself.
+- **Chosen solution:** Node 24 in `.nvmrc`, the root `engines` field, CI, and the README badge. ESLint flat config with the recommended rules and the Node and Jest globals. The fixture listens on `127.0.0.1` port `0`, logs path, User-Agent, and start time, and tracks current and peak concurrency. `createClock()` and `createLogger()` are the real defaults. The existing recursive crawl is unchanged and does not call them yet.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 114 tests. The new clock, logger, and fixture tests pass. The checkpoint tests are still `test.failing`.
+- **Lesson learned:** The linter's first job was the code that already existed. `sortPages` assigned `aHits` and `bHits` without declaring them, and two test imports were unused. Those are fixed. The crawl bugs stay until their own steps.
+
 ## Change Log
+
+### 2026-10-08 (Milestone 1 setup)
+
+- Approved the Milestone 1 checkpoint.
+- Pinned Node 24. Added ESLint. `npm run verify` and CI run lint, then tests.
+- Added the local fixture server, the real clock, and the stderr logger. The crawl loop does not use them yet.
 
 ### 2026-10-08 (second checkpoint correction)
 

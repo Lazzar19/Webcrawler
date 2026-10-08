@@ -2,7 +2,7 @@
 
 A command-line web crawler built in **Node.js**. It traverses same-host links and prints a crawl report. The CLI is the whole product. There is no web UI in this repository.
 
-![Node.js](https://img.shields.io/badge/Node.js-18.7.0-green?style=flat&logo=node.js)
+![Node.js](https://img.shields.io/badge/Node.js-24-green?style=flat&logo=node.js)
 ![JavaScript](https://img.shields.io/badge/JavaScript-ES2022-yellow?style=flat&logo=javascript)
 ![Jest](https://img.shields.io/badge/tested%20with-jest-orange?style=flat&logo=jest)
 ![License](https://img.shields.io/badge/license-ISC-blue?style=flat)
@@ -47,7 +47,7 @@ webcrawler/
 
 ### Prerequisites
 
-- Node.js `18.7.0`, listed in `backend/.nvmrc`
+- Node.js 24, listed in `backend/.nvmrc`
 
 ```bash
 cd backend
@@ -61,7 +61,7 @@ npm install --prefix backend
 npm test
 ```
 
-`npm test` from the repository root runs the backend Jest suite. `npm run verify` is the same command.
+`npm test` from the repository root runs the backend Jest suite. `npm run lint` runs ESLint. `npm run verify` runs lint, then tests.
 
 ### Run
 
@@ -83,6 +83,7 @@ npm start -- <url>
 | `p-limit` | Concurrency limiter for async requests. The current crawl can stall under it. |
 | `robots-parser` | Installed for later robots enforcement. The crawl does not call it yet. |
 | `jest` | Testing framework (dev dependency) |
+| `eslint` | Linter (dev dependency) |
 
 ## Author
 

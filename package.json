@@ -5,10 +5,11 @@
   "description": "Workspace commands for the Webcrawler project",
   "scripts": {
     "test": "npm --prefix backend test",
+    "lint": "npm --prefix backend run lint",
     "start": "npm --prefix backend start",
-    "verify": "npm test"
+    "verify": "npm run lint && npm test"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=24"
   }
 }

@@ -1,7 +1,6 @@
 const fs = require("fs");
 const path = require('path')
 const os = require('os');
-const { get } = require("https");
 
 function getDesktopPath() {
 
@@ -89,9 +88,7 @@ function saveToCSV(pages) {
 function sortPages(pages) {
     const pagesArr = Object.entries(pages);
     pagesArr.sort((a,b) => {
-        aHits = a[1];
-        bHits = b[1];
-        return b[1] - a[1]; //descending order
+        return b[1] - a[1];
     })
 
     return pagesArr;

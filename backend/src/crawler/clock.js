@@ -1,0 +1,16 @@
+function createClock() {
+  return {
+    now() {
+      return Date.now();
+    },
+    sleep(ms) {
+      return new Promise((resolve) => {
+        setTimeout(resolve, ms);
+      });
+    },
+  };
+}
+
+module.exports = {
+  createClock,
+};

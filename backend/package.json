@@ -9,10 +9,10 @@
     "concurrency",
     "http"
   ],
-
   "main": "src/main.js",
   "scripts": {
     "start": "node src/main.js",
+    "lint": "eslint .",
     "test": "jest"
   },
   "repository": {
@@ -26,6 +26,9 @@
   },
   "homepage": "https://github.com/Lazzar19/webcrawler#readme",
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
     "jest": "^29.7.0"
   },
   "dependencies": {
