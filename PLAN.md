@@ -37,13 +37,15 @@ Each theme below is the same problem in C++, Rust, and Go. The JavaScript syntax
 - A thin CLI over a library-shaped engine
 - Tests that lock the contract, including a local HTTP server
 
-### Author checkpoints
+### Checkpoints
 
-LLM-written code is allowed. A milestone is not done until the author can explain the checkpoint without reading the code.
+Each checkpoint is a spec-first step: the agent writes the artifact before the implementation it describes, then stops for the author's review. Implementation starts only after the author approves the artifact.
 
-- Milestone 1: the author writes the URL equivalence tests, including redirect aliases, and the worker-loop sketch before implementation. The sketch must show `take`, the commit-in-order step, and the termination condition. An agent may implement the frontier and worker loop only after both exist in the repository and the learning log. The author must then be able to redraw the queue without opening the file.
-- Milestone 2: the author writes the robots decision table (allow, disallow, missing file, 4xx, 5xx, fetch failure) and the politeness cases (global cap, per-origin cap, minimum gap, crawl-delay, retry gap) before wiring the library.
-- Milestone 4: the author writes the "Design decisions" and "Known limitations" sections of the README.
+A milestone is not done until the author can explain the checkpoint without reading the code. The agent's artifacts are written to make that possible: plain language, small examples, and no reference to code that does not exist yet.
+
+- Milestone 1: the agent writes the URL equivalence tests, including redirect aliases, and a worker-loop sketch in the learning log before implementation. The sketch must show `take`, the commit-in-order step, and the termination condition. The agent then stops for review. It implements the frontier and worker loop only after the author approves both. The author must then be able to redraw the queue without opening the file.
+- Milestone 2: the agent writes the robots decision table (allow, disallow, missing file, 4xx, 5xx, fetch failure) and the politeness cases (global cap, per-origin cap, minimum gap, crawl-delay, retry gap) in the learning log before wiring the library, then stops for review.
+- Milestone 4: the agent drafts the "Design decisions" and "Known limitations" sections of the README from Cemented Behavior. The author reviews them and must be able to defend each point.
 
 ## Rules for Implementation Agents
 
@@ -52,7 +54,7 @@ These apply to every change made by an agent, including Grok. They exist because
 ### Process
 
 - Read Cemented Behavior before writing code. If a case is not covered, stop and ask. Do not invent policy in code. A new policy is an edit to Cemented Behavior first.
-- Do not start Milestone 1 frontier or worker code until the author checkpoint for Milestone 1 exists. If it is missing, stop and say so.
+- At each checkpoint in [Checkpoints](#checkpoints), write the artifact first, then stop and ask the author to review it. Do not write the implementation it describes until the author approves. Record the approval date in the learning-log entry.
 - Work one milestone at a time. Do not implement later-milestone behavior early unless a checklist item says so.
 - Every change keeps `npm run verify` green. Do not delete or weaken a test to make it pass. Tests that lock retired behavior are rewritten only where a checklist item says so.
 - Do not edit Frozen scope into existence. Do not add dependencies other than the ones listed in [Dependencies](#dependencies).
@@ -78,24 +80,33 @@ These are decisions. Change them by editing this section, not by inventing a sec
 
 ### URL identity
 
-The canonical key is produced by the WHATWG URL parser (`new URL`).
+`canonicalKey(input)` is identity only. The fetched URL is not the key.
 
-- Drop the fragment.
-- Lowercase the scheme and hostname. The parser already does this.
-- Omit default ports (`http` 80, `https` 443). Keep any other port. The parser already does this.
-- Keep the path and its case. `https://host` and `https://host/` are the same key. A trailing slash on any longer path is removed.
-- Keep the query. Parse it with `URLSearchParams`, sort entries by name, then by value, and serialize with `URLSearchParams.toString()`. Parameter order does not create two keys. A missing query and an empty query (`?`) are the same key.
-- Scheme, hostname, and port stay in the key. `http` and `https` are different. `www` is not stripped. Different query values are different keys.
-- The key is identity only. The URL that is fetched is the resolved URL with the fragment removed, not the key. When two spellings share a key, the first one reserved is the one fetched.
-- `canonicalKey(canonicalKey(x)) === canonicalKey(x)` for every valid input. A test checks this on the equivalence cases.
+Procedure, in this order. No other normalization exists.
+
+1. Parse with `new URL(input)`. If that throws, `canonicalKey` throws the same `TypeError`. It does not return `null` or any other sentinel. `canonicalKey` also throws `TypeError` when the parsed scheme is not `http:` or `https:`, and when the parsed URL has a non-empty username or password. It does not return a key with the userinfo removed. These three cases are the complete definition of invalid input. Callers do not use the throw to skip a link. The link pipeline and the redirect loop reject these cases before calling `canonicalKey`, so a throw at run time is a bug and therefore fatal.
+2. Path only: do not call `decodeURIComponent`, do not re-encode, and do not change the case of percent-escapes. The path is `url.pathname` as the parser returned it, then the trailing-slash rule below. In the path, `%7e` and `%7E` stay different, `%2F` and `%2f` stay different, and neither becomes `/`. This rule does not apply to the query. Step 7 decodes and re-encodes the query.
+3. Drop the fragment. It is not part of the key.
+4. Lowercase scheme and hostname come from the parser. Keep path case.
+5. Ports come from the parser. `80` is omitted only for `http`. `443` is omitted only for `https`. `http://host:443` keeps `:443`. `https://host:80` keeps `:80`. Any other port stays.
+6. Trailing slashes. `https://host` and `https://host/` are the same key, and the stored path is `/`. If the path is longer than `/` and ends with `/`, remove that one slash, and repeat until it does not end with `/`. This is what idempotence requires. It does not collapse internal empty segments: `/a//b` stays `/a//b`, and `/a//` becomes `/a`. Apply this to the path before the query is serialized, so `/a/?x=1` and `/a/?x=1#section` both have the key path `/a` and the query below.
+7. Query. A missing query and an empty query (`?`) are the same key, serialized with no `?`. Otherwise parse `url.search` with `URLSearchParams`, so `?a` and `?a=` are the same empty value, and `+` and `%20` are the same space. Keep repeated pairs. Copy the entries and sort them by name, then by value, using JavaScript code-unit order (`<`), not `localeCompare`. Append the sorted entries into a new `URLSearchParams` and serialize with `toString()`. `?B=1&a=1` and `?a=1&B=1` are the key query `B=1&a=1`, because `B` is before `a` in code-unit order. A locale sort would put `a` first. That result is wrong. Because `URLSearchParams` decodes then re-encodes, percent-escapes in the query are normalized: `?q=%7e`, `?q=%7E`, and `?q=~` are all the key query `q=%7E`, and `?q=%2f` and `?q=/` are both `q=%2F`. Bytes that are not valid UTF-8 decode to U+FFFD, so `?q=%FF` and `?q=%FE` share the key query `q=%EF%BF%BD`. That collision is accepted and listed as a known limitation.
+8. The key is `scheme://hostname[:port]/path`, then `?` and the serialized query only when the string produced by `toString()` in step 7 is non-empty. Whether the raw `url.search` was non-empty does not matter. `?&` has a non-empty `url.search`, its serialized query is empty, and its key is `…/a` with no `?`. No fragment.
+
+`canonicalKey(canonicalKey(x)) === canonicalKey(x)` for every input that returns a key. A test checks this on the equivalence cases. An input that throws does not have a key.
+
+The fetched URL is the resolved URL with the fragment removed, not the key. On one page, resolve every link first. When several resolved URLs share a key, the spelling that is fetched is the earliest in document order. Sorting by key orders distinct keys. It does not replace that spelling. A later discovery of the same key does not fetch and does not change the spelling. So if `/a/` is reserved before `/a`, the request path is `/a/`. If the reserved spelling is `?q=b%20a`, the request uses `%20`, not the key's `+` form.
 
 ### Scope and link resolution
 
 - Stay on the start URL's origin: scheme, host, and port. Subdomains are outside the crawl.
 - Read each `<a>` element's raw `href` attribute with `getAttribute('href')`. Do not use the DOM `href` property. An empty or whitespace-only value is ignored.
 - The document base is the first `<base href>` resolved against the final response URL, if it parses. Otherwise it is the final response URL.
-- Resolve each link with `new URL(raw, documentBase)`. String concatenation is not link resolution. A value that does not parse is ignored.
+- Resolve each link with `new URL(raw, documentBase)`. String concatenation is not link resolution. A value that does not parse is ignored. `canonicalKey` is not called on it.
 - Queue only `http` and `https` links. Other schemes (`mailto:`, `javascript:`, `tel:`, `data:`) are ignored and produce no record.
+- A resolved link with a non-empty username or password is ignored. It is not fetched, it is not rewritten by stripping the userinfo, and it does not enter `seen`. This is not the start-URL rule. A start URL with userinfo is a fatal configuration error and exit `2` before any fetch. One bad discovered link does not stop the crawl.
+- A redirect `Location` that resolves with a username or password is not requested. That record is `failed` / `bad-redirect`.
+- A redirect `Location` that resolves to a scheme other than `http` or `https` is not requested. A different scheme is a different origin, so that record is `skipped` / `redirect-off-origin`. `canonicalKey` is not called on it.
 - Ignored links produce no `PageResult`. They may produce a debug log line.
 
 ### Frontier and reservation
@@ -104,7 +115,7 @@ One crawl owns one frontier. The frontier is a FIFO queue plus a `seen` map from
 
 Each link from a page at depth `d` is handled in this order. The first rule that matches decides the outcome.
 
-1. Resolve and canonicalize. Invalid or non-`http(s)` links are ignored.
+1. Resolve with `new URL`. If it throws, ignore the link. If the resolved URL has a username or password, ignore it. If the scheme is not `http` or `https`, ignore it. Otherwise canonicalize. Invalid input never becomes a `seen` entry and never becomes a page failure.
 2. The key is already in `seen`: ignored. No new record. This is the deduplication rule.
 3. The origin differs from the start origin: one record, `skipped` / `other-origin`. Not fetched.
 4. `d + 1 > maxDepth`: one record, `skipped` / `depth-limit`. Not fetched.
@@ -115,15 +126,14 @@ Every created record, skipped or reserved, enters `seen`, so each canonical key 
 
 - The start URL is reserved first, at depth 0, with `discoveredFrom: null`.
 - Reservation is a synchronous check-and-insert. No `await` may occur between the `seen` check and the insert.
-- Before step 1, a page's links are deduplicated by key and sorted by key. Step order then gives the same records for the same responses.
+- Before step 1, resolve the page's links in document order. For one key, keep the earliest spelling. Then sort those survivors by key. Step order then gives the same records, and the same fetched spelling, for the same responses.
 - Every later record stores `discoveredFrom`, the canonical key of the page whose links created it.
 - A robots-disallowed page still consumed its reservation. `maxPages` counts reservations, not successful fetches.
 
 ### Depth and page limit
 
 - The start URL is depth 0.
-- `maxDepth` is inclusive. A page at depth `d` reserves links only when `d < maxDepth`. `maxDepth: 0` fetches only the start URL.
-- A page at depth `maxDepth` is still parsed. Its new links become `skipped` / `depth-limit` records, so the depth boundary is visible in the result.
+- `maxDepth` is inclusive. `maxDepth: 0` fetches only the start URL. A page at depth `d` is fetched when `d <= maxDepth`. Its links are reserved for fetch only when `d < maxDepth`. A page at depth `maxDepth` is still parsed, and each new link becomes a `skipped` / `depth-limit` record. The link is not dropped and it is not fetched.
 - `maxPages` counts URLs reserved for fetch, including the start URL. Discoveries after the limit are `skipped` / `page-limit`.
 - `maxPages` must be a positive integer. There is no unlimited value. `Infinity` is rejected.
 - The CLI must pass `0` through. A missing flag uses the default. A present `0` stays `0`.
@@ -146,7 +156,9 @@ Every created record, skipped or reserved, enters `seen`, so each canonical key 
 
 Fixed constants, not configuration: retry delay cap 5000 ms, crawl-delay cap 10 seconds, redirect hop limit 5, `robots.txt` size limit 500 KiB.
 
-An omitted field is the default above. An unknown config key is a configuration error, so a typo cannot silently fall back to a default. Validation: `maxDepth` and `retryCount` and `minIntervalMs` and `retryBaseDelayMs` are non-negative integers. `maxPages`, `concurrency`, `perOriginLimit`, `timeoutMs`, and `maxResponseBytes` are positive integers. `respectRobots` is a boolean. `userAgent` is a non-empty string.
+`startUrl` is a required config field with no default. Config validation rejects it unless it parses, its scheme is `http` or `https`, and it has no username or password. This check runs inside config creation, before `crawl()` reserves anything, so `canonicalKey` never sees an invalid start URL even when `crawl()` is called from code instead of the CLI.
+
+An omitted field other than `startUrl` gets the default above. An unknown config key is a configuration error, so a typo cannot silently fall back to a default. Validation: `maxDepth` and `retryCount` and `minIntervalMs` and `retryBaseDelayMs` are non-negative integers. `maxPages`, `concurrency`, `perOriginLimit`, `timeoutMs`, and `maxResponseBytes` are positive integers. `respectRobots` is a boolean. `userAgent` is a non-empty string.
 
 ### Workers and termination
 
@@ -155,17 +167,31 @@ An omitted field is the default above. An unknown config key is a configuration 
 Worker loop:
 
 1. `item = await frontier.take()`. `null` means the crawl is over, and the worker returns.
-2. Mark the record `fetching` and assign it the next dequeue sequence number.
+2. The record is now `fetching` and has its dequeue sequence number. `take()` assigns both synchronously before it returns the item, so every item a worker holds already has a number.
 3. Acquire the politeness lease for the item's origin (see Politeness).
-4. Check robots. If disallowed or unavailable, record the skip.
-5. Run the redirect loop (see Redirects). Each network attempt calls the lease's `beforeAttempt`.
+4. Check robots. The check stays at this point in the loop for every milestone. In Milestone 1 the check is a stand-in that always allows the URL. It does not fetch `robots.txt`, parse it, cache it, fail closed, or apply `Crawl-delay`. `respectRobots` is stored and does not change the stand-in. Milestone 2 replaces the stand-in with the robots manager. The call site does not move. A real disallow is `skipped` / `robots`. A real unavailable file is `skipped` / `robots-unavailable`. Neither contributes links.
+5. If the check allows the URL, run the redirect loop (see Redirects). Each network attempt calls the lease's `beforeAttempt`. In Milestone 1, `beforeAttempt` returns immediately.
 6. Classify the response. If it is HTML, extract links.
 7. Release the lease.
 8. Commit the item with its links (see Commit order). This always happens, in a `finally`, including after a skip or a classified failure.
 
-The frontier tracks three numbers: queued items, items taken but not committed, and results waiting in the commit buffer. The crawl is over when the queue is empty and every taken item has been committed. When that becomes true, the frontier resolves every pending `take()` with `null`. A worker never exits because the queue is momentarily empty while other items are in flight, since those items may still add links.
+The frontier tracks three numbers: queued items, items taken but not committed, and results waiting in the commit buffer. A worker never treats a momentarily empty queue as the end, because a taken item that has not committed can still add links.
 
-`crawl()` resolves after all workers return. If an unclassified exception escapes a worker, the crawl stops taking items, waits for the other workers, and rejects with that exception.
+Normal termination: the queue is empty and every item that `take()` already returned has been committed. The frontier then resolves every pending `take()` with `null`. Each of those workers returns. `crawl()` resolves after all workers have returned. `null` means this crawl is over. It is not an error.
+
+Fatal stop: an exception that is not a classified page failure. The frontier enters fatal-stop immediately.
+
+- It does not hand out any further queued item.
+- Every `take()` that is already waiting resolves with `null`, so no worker stays blocked in `take()`. A worker that receives that `null` returns. It has no item and does not commit.
+- A politeness wait is released the same way, without throwing a second error. Milestone 1 does not wait, because `acquire` returns immediately. Milestone 2 must release the lease wait on fatal-stop, or a worker can sit there forever.
+- The worker that threw holds an item, so it has a sequence number. Its `finally` commits that number with an empty link list if it has not committed yet, then rethrows the same exception object.
+- Any other worker that already holds an item finishes that item and commits it.
+- While stopping, commits follow the stopping rule in Commit order: `nextCommit` still advances, and nothing is reserved.
+- The first exception that triggers fatal-stop is the rejection value. A later exception from another worker is logged and does not replace it.
+- `crawl()` waits for every worker with `Promise.allSettled`, not `Promise.all`. `Promise.all` rejects while other workers are still running, which breaks "after the workers return".
+- `crawl()` rejects with that first exception after the workers return. Shutdown must not replace it, wrap it, or reject with a new error. A failure inside shutdown is logged and does not become the rejection.
+
+Classified page failures are not fatal-stop. They commit an empty link list and the crawl continues.
 
 ### Commit order
 
@@ -175,6 +201,8 @@ Workers finish in network order, which changes from run to run. Links are theref
 - A finished item is placed in a commit buffer keyed by sequence number.
 - The frontier keeps `nextCommit`. While the buffer holds `nextCommit`, it removes that entry, applies the reservation rules to its links, and increments `nextCommit`.
 - Skipped and failed items are committed with an empty link list. A sequence number that is never committed stalls the crawl, which is why step 8 runs in `finally`.
+- A commit marks its sequence number committed before it applies reservations. An exception during reservation then cannot cause the `finally` to commit the same number twice.
+- Stopping rule. Once the crawl is stopping, after a SIGINT or a fatal-stop, every commit still removes its entry and advances `nextCommit`, but it reserves nothing. The rule depends on when the commit happens, not on when the page finished. A page that finished before the stop but was still waiting in the buffer reserves nothing when it commits after the stop.
 
 Because the queue is FIFO and commits happen in dequeue order, the crawl is breadth-first. A key is always first discovered at its smallest depth. The same responses produce the same records in the same order for any `concurrency`. Fetching stays concurrent. Only reservation waits.
 
@@ -182,12 +210,12 @@ Because the queue is FIFO and commits happen in dequeue order, the crawl is brea
 
 The HTTP client does not follow redirects. The worker runs the redirect loop because every hop is a scope and robots decision.
 
-- A response with status `301`, `302`, `303`, `307`, or `308` and a `Location` header is a hop. Resolve `Location` against the current URL, then canonicalize it.
+- A response with status `301`, `302`, `303`, `307`, or `308` and a `Location` header is a hop. Resolve `Location` against the current URL. If that throws, or the resolved URL has a username or password, the record is `failed` / `bad-redirect` and `canonicalKey` is not called. If the resolved scheme is not `http` or `https`, the record is `skipped` / `redirect-off-origin` and `canonicalKey` is not called. Otherwise canonicalize it.
 - If the hop leaves the start origin, the record is `skipped` / `redirect-off-origin`. The off-origin URL is not requested.
 - If the hop key equals the record's own key or an earlier hop in this chain, the record is `failed` / `redirect-loop`.
 - If the hop key is already in `seen` and owned by another record, this record is `skipped` / `duplicate`. That URL is not requested here. The other record owns it.
-- Otherwise add the hop key to `seen` as an alias owned by this record. An alias does not consume a `maxPages` slot. Check robots for the hop. If allowed, request it.
-- More than 5 hops is `failed` / `redirect-limit`. A redirect status without `Location` is `failed` / `bad-redirect`.
+- Otherwise add the hop key to `seen` as an alias owned by this record. An alias does not consume a `maxPages` slot. Check robots for the hop with the same function as step 4 of the worker loop. In Milestone 1 that check is the allow-all stand-in. If allowed, request the hop's resolved spelling, with the fragment removed, not the canonical key.
+- More than 5 hops is `failed` / `redirect-limit`. A redirect status without `Location`, or a hop URL with a username or password, is `failed` / `bad-redirect`. The userinfo hop is not requested.
 - `finalUrl` is the last requested URL. Links are resolved against it. The record keeps its original depth and `discoveredFrom`.
 
 ### Politeness
@@ -251,7 +279,7 @@ Retries live in the HTTP client and consume the same reservation.
 - `tls`: certificate and TLS errors (`CERT_*`, `ERR_TLS_*`, `DEPTH_ZERO_SELF_SIGNED_CERT`).
 - `too-large`: body over the byte limit.
 - `http-status`: final status 4xx or 5xx.
-- `redirect-loop`, `redirect-limit`, `bad-redirect`: as defined in Redirects.
+- `redirect-loop`, `redirect-limit`, `bad-redirect`: as defined in Redirects. `bad-redirect` is a redirect status with no `Location`, a `Location` that does not resolve, or a hop whose resolved URL has a username or password.
 - `parse`: the HTML parser threw on the body.
 
 Node's `fetch` reports network failures as `TypeError('fetch failed')` with the system code on `error.cause.code`. The mapping reads `cause.code` and is unit-tested per kind. A network error with an unknown code is `connect`, and its raw code goes into `errorMessage`.
@@ -286,7 +314,7 @@ Use the `robots-parser` dependency for allow/disallow and crawl-delay decisions.
 - The engine returns a `CrawlResult`. Reporters format it. The engine does not write files and does not choose a Desktop path.
 - Formats: console summary, JSON, and CSV. CSV quoting covers commas, quotes, and newlines. CSV columns are the `PageResult` fields in contract order. `null` is an empty cell.
 - stdout carries one artifact. With `--format console` (the default), the summary goes to stdout. With `--format json` or `csv` and no `--output`, that format goes to stdout and the summary goes to stderr. With `--output`, the chosen format is written to that path, and the summary goes to stdout.
-- On the first SIGINT, stop handing out queued items, let in-flight items finish including their retries, do not reserve links from pages that finish after the signal, write the partial `CrawlResult` with `stopReason: "interrupted"`, and exit `0`. A second SIGINT exits `130` immediately without writing.
+- On the first SIGINT, stop handing out queued items, let in-flight items finish including their retries, reserve nothing from any commit after the signal (the stopping rule in Commit order), write the partial `CrawlResult` with `stopReason: "interrupted"`, and exit `0`. A second SIGINT exits `130` immediately without writing.
 
 ### Result shapes
 
@@ -324,7 +352,7 @@ No report-only fields.
 
 Inject only what tests need to replace.
 
-- `crawl(config, { httpClient, clock, logger, signal })`. Each defaults to the real implementation.
+- `crawl(config, { httpClient, clock, logger, signal })`. `config` is a plain object that includes `startUrl` and is validated as in Defaults. Each dependency defaults to the real implementation, so `crawl({ startUrl, ... })` with no second argument is a valid call.
 - `clock` is `{ now(), sleep(ms) }`. Every time measurement and every delay in the engine, HTTP client, and politeness gate goes through it. Unit tests use a fake clock. Integration tests may use the real clock with `minIntervalMs` and `retryBaseDelayMs` set to small values.
 - `logger` is `{ debug, info, warn, error }` and writes to stderr by default.
 - `signal` is the stop request used by the CLI for SIGINT.
@@ -411,7 +439,7 @@ Integration tests use a real server, not a `fetch` mock.
 
 **Goal:** The crawl is deterministic. Limits mean what this plan says they mean.
 
-Author checkpoint first: write the equivalence tests and the worker-loop sketch in the learning log. Agent work on the frontier starts after that.
+Checkpoint first: the agent writes the equivalence tests and the worker-loop sketch in the learning log, then stops for author review. Frontier work starts after approval.
 
 Setup:
 
@@ -421,7 +449,7 @@ Setup:
 
 URL policy:
 
-- `[ ]` Implement the canonical key from Cemented Behavior. Test scheme, port, `www`, fragment, trailing slash, query order, empty query, and idempotence.
+- `[ ]` Implement the canonical key from Cemented Behavior. In the same change, replace the local stand-in in [backend/tests/url-identity.test.js](backend/tests/url-identity.test.js) with the real module and turn every `test.failing` in that file into `test`. Convert all of them at once. Do not convert only the ones that went red: a `test.failing` that stays green means that case is still wrong.
 - `[ ]` Replace string concatenation with `getAttribute('href')` and `new URL(raw, documentBase)`. Cover `./`, `../`, bare relative paths, query-only links, protocol-relative links, `<base href>`, non-`http(s)` schemes, and a base URL that already has a path.
 - `[ ]` Rewrite the existing tests that lock retired behavior: keys without a scheme, `about:blank` resolution, `maxPages: Infinity`, the hit-count map, and `sortPages`.
 
@@ -432,6 +460,7 @@ Frontier and workers:
 - `[ ]` Implement commit order with a sequence number and a commit buffer.
 - `[ ]` Implement the termination condition. `take()` resolves `null` for every waiting worker when the crawl is over.
 - `[ ]` Call the politeness gate's `acquire` and `beforeAttempt` before each fetch. In this milestone both return immediately.
+- `[ ]` Call the robots check at its place in the worker loop. In this milestone the check is the allow-all stand-in. Do not fetch or parse `robots.txt`.
 - `[ ]` Apply inclusive `maxDepth` and reservation-based `maxPages`. Change the default page limit to `50` and reject `Infinity`. Add the new config fields and the unknown-key check.
 
 Fetch path:
@@ -449,14 +478,16 @@ Fixture tests:
 - `[ ]` Identical `pages` arrays for `concurrency` 1 and 5 when routes have different response delays.
 - `[ ]` A redirect alias that does not consume a page slot, a redirect to an already reserved key, an off-origin redirect that is never requested, and a redirect loop.
 - `[ ]` A fan-out site (ten links per page, depth 2, concurrency 5) that would stall the old limiter.
+- `[ ]` The first reserved spelling is the request URL: `/a/` is requested when it is reserved before `/a`, `/a` is requested when it comes first, and `?q=b%20a` is requested with `%20`. A discovered link with userinfo is not requested and has no record. These are the tests in [backend/tests/fetch-spelling.test.js](backend/tests/fetch-spelling.test.js). Point them at the real `crawl()` and turn every `test.failing` into `test`, all at once, when the crawler exists. Move them onto the shared fixture server.
+- `[ ]` Fatal-stop: an injected HTTP client that throws an unclassified error makes `crawl()` reject with that same error object, after every worker has returned, and nothing stays pending.
 
-**Done when:** those tests pass against the local server, lint passes, and the author can redraw the queue, the commit buffer, and the termination condition without opening the file.
+**Done when:** those tests pass against the local server, lint passes, no `test.failing` remains in `url-identity.test.js` or `fetch-spelling.test.js`, and the author can redraw the queue, the commit buffer, and the termination condition without opening the file.
 
 ### Milestone 2 - HTTP policy and robots
 
 **Goal:** A rude or stuck network cannot define the crawl.
 
-Author checkpoint first: write the robots decision table and the politeness cases in the learning log.
+Checkpoint first: the agent writes the robots decision table and the politeness cases in the learning log, then stops for author review.
 
 - `[ ]` Add the per-attempt timeout and the streaming byte limit to the HTTP client.
 - `[ ]` Map network errors to the error taxonomy through `cause.code`. Unit-test each kind with an injected `fetchImpl`.
@@ -464,7 +495,7 @@ Author checkpoint first: write the robots decision table and the politeness case
 - `[ ]` Build the robots manager on `robots-parser` with the single-flight cache, the status rules, fail-closed behavior, the product-token match, and capped crawl-delay. Check every redirect hop.
 - `[ ]` Implement the politeness gate: per-origin FIFO leases, `nextAllowedAt` set before waiting, the gap on every attempt, crawl-delay override, and `waitedMs`.
 - `[ ]` Unit-test the gate and the retry delays with a fake clock.
-- `[ ]` Delete the custom robots parser after the new tests cover the decision table.
+- `[ ]` Delete the custom robots parser after the new tests cover the decision table. In the same change, retire [backend/tests/robots.test.js](backend/tests/robots.test.js). It locks behavior this plan forbids: `403` and network errors return an empty file, which allows crawling where the plan fails closed. It also locks a one-hour cache TTL, the `MyCrawlerBot` user agent, and a direct global `fetch`.
 - `[ ]` Extend the fixture with a disallowed path, a redirect into a disallowed path, a missing `robots.txt`, a `robots.txt` that returns `500`, a slow response that hits the timeout, an oversized body, a `503` that succeeds on retry, a `429` with `Retry-After`, and a same-origin run that records peak concurrency.
 
 **Done when:** a disallowed path is never requested, including through a redirect. A timeout becomes a failed `PageResult` rather than a hung process. A same-origin run never has more than `perOriginLimit` requests in flight. Consecutive request starts to one origin are at least `minIntervalMs` apart in the fixture log.
@@ -489,8 +520,8 @@ Author checkpoint first: write the robots decision table and the politeness case
 
 - `[ ]` Document the queue, commit order, stable order, redirect identity, the politeness split, the failure model, and the defaults.
 - `[ ]` Include one copy-paste demo against the local fixture and one sample JSON report.
-- `[ ]` List known limitations: no JavaScript rendering, no subdomain crawl, no sitemap crawl, no resume, single process, UTF-8 decoding only, `nofollow` not honored, a slow page delays reservation of later pages' links, and one origin's backoff holds a worker.
-- `[ ]` Author writes the design-decisions and limitations sections.
+- `[ ]` List known limitations: no JavaScript rendering, no subdomain crawl, no sitemap crawl, no resume, single process, UTF-8 decoding only, non-UTF-8 query bytes such as `%FF` and `%FE` sharing one key, `nofollow` not honored, a slow page delays reservation of later pages' links, and one origin's backoff holds a worker.
+- `[ ]` Agent drafts the design-decisions and limitations sections. Author reviews and approves them.
 - `[ ]` Add a learning-log entry for the queue, commit order, and robots fail-closed behavior.
 
 **Done when:** Milestones 0–3 are checked, and a reader can run the demo from the README alone.
@@ -553,7 +584,7 @@ A milestone is complete when it has:
 - no violation of Rules for Implementation Agents
 - `npm run verify` passing
 - this file updated
-- the author checkpoint written in the learning log
+- the checkpoint artifact written by the agent in the learning log and approved by the author
 - a command in Verification that shows it
 
 ## Architecture Boundary
@@ -617,7 +648,102 @@ Add a file when a boundary above is being violated. Do not add a file only to ma
 - **How it was verified:** Plan review only. Implementation is still ahead.
 - **Lesson learned:** "Deterministic" is a claim about concurrency, not about sorting. It needs a mechanism.
 
+### 2026-10-08 - Milestone 1 checkpoint, awaiting approval
+
+Not approved. No frontier, worker loop, or URL policy is implemented. The author reviews this entry and [backend/tests/url-identity.test.js](backend/tests/url-identity.test.js) before any of that work starts.
+
+- **Problem:** The crawl still identifies a page by host plus path, joins links by string concatenation, and reserves work by finishing a recursive call. Concurrent finishes would not be stable even after the links on one page are sorted.
+- **Chosen solution:** Lock the canonical key with tests, and describe the worker loop in plain language before any of that code exists. `canonicalKey` returns the sentinel `NOT-IMPLEMENTED`, so each assertion runs and fails. The tests are `test.failing` so the current suite stays green. They become normal tests in the same change that implements the key.
+- **How it was verified:** `node --check` on the new test file, and `npm test`. The new assertions fail on the sentinel and Jest counts each `test.failing` as an expected failure. The previous 61 tests still pass.
+- **Lesson learned:** The key and the commit order are one contract. Two spellings can share a key. The fetched URL is the first reserved spelling, not the key.
+
+### 2026-10-08 - Checkpoint correction
+
+Not approved. Still no production crawler, frontier, or URL policy.
+
+- **Problem:** The checkpoint left robots, fatal-stop, trailing slashes, scheme-specific ports, query ordering, userinfo, and the fetched spelling for an agent to guess.
+- **Chosen solution:** Milestone 1 keeps the robots call and implements it as an allow-all stand-in. Normal termination resolves pending `take()` with `null` only when the queue is empty and every taken item is committed. Fatal-stop resolves those same waits with `null` and rejects with the original exception. The key removes repeated trailing slashes but not internal empty segments, omits `80` only for `http` and `443` only for `https`, sorts query pairs by code-unit order, and uses `URLSearchParams` without a further decode step. A discovered link with userinfo is ignored. The request uses the first reserved spelling.
+- **How it was verified:** The decisions are in Cemented Behavior. The new assertions are `test.failing` and are not a production implementation. The retired tests listed below were checked again and were not edited.
+- **Lesson learned:** Idempotence decides repeated trailing slashes. One removal of a final slash, repeated until the path is stable, turns `/a//` into `/a` and leaves `/a//b` alone. A locale sort would not.
+
+### 2026-10-08 - Second checkpoint correction
+
+Not approved.
+
+- **Problem:** A second review found two keys that broke idempotence (`?&`, and a non-`http(s)` redirect hop reaching `canonicalKey`), wording that said percent-escapes stay distinct in the query, an unspecified `crawl()` signature, fatal-stop gaps (`Promise.all`, reservation while stopping, which exception wins), a vacuous userinfo assertion, and three errors in the retired-test list.
+- **Chosen solution:** Cemented Behavior now settles each point. See the change log entry of the same date.
+- **How it was verified:** Each canonicalization rule was checked against Node's `URL` and `URLSearchParams` with a reference implementation that was not committed. Node's `fetch` refuses URLs that contain credentials, so "`/secret` was never requested" cannot fail for an implementation that tries to fetch it.
+- **Pending before approval:** the two checkpoint test files still need the matching edits. Add a query percent-escape case and a `?&` case to `url-identity.test.js`. Assert in `fetch-spelling.test.js` that the userinfo crawl has only the start record. Add the reversed-order spelling test.
+- **Lesson learned:** A rule that is correct for one URL component, such as "do not decode", is wrong when written as a rule for the whole URL.
+
+#### Retired behavior still locked by old tests
+
+These tests were not deleted or weakened. The Milestone 1 checklist item "Rewrite the existing tests that lock retired behavior" is what changes them, and only after this checkpoint is approved.
+
+- Keys without a scheme. [backend/tests/crawl.test.js](backend/tests/crawl.test.js) expects `normalizeURL` to return `blog.boot.dev/path` for both `http` and `https`, and the crawl tests look up `example.com/pageA`, `example.com/file`, and `example.com`. The replacement keys keep the scheme, so `http` and `https` are different, and a lookup is the full key such as `https://example.com/pageA`.
+- `about:blank` resolution. No current test contains the string `about:blank`. The implementation reads the DOM `href` of a document whose base is `about:blank`, so a relative value that is not root-relative is returned unresolved, and `new URL` then rejects it. The test that locks this is `getURLsfromHTML invalid urls` in [backend/tests/crawl.test.js](backend/tests/crawl.test.js). It expects `href="invalid"` on base `https://blog.boot.dev` to produce no link. Under the new rules, `new URL("invalid", documentBase)` resolves to `https://blog.boot.dev/invalid`. The other `getURLs` tests do not lock retired behavior. They expect resolved spellings such as `https://blog.boot.dev/path/`, and resolved spellings keep their trailing slash. Only the key drops it. Those tests change only for the new signature, which resolves against the document base.
+- `maxPages: Infinity`. [backend/tests/crawl-config.test.js](backend/tests/crawl-config.test.js) accepts `Infinity` and expects it as the default when only `maxDepth` is overridden. The replacement rejects `Infinity`. The default is `50`.
+- The hit-count map. The cycle test expects `example.com/pageA` to be at least `1` and `example.com/pageB` to be `1`. Non-HTML responses expect `{'example.com/file': 1}`. The replacement stores a `PageResult` per key. A non-HTML response is `skipped` / `non-html`. Repeat discoveries do not increment a count.
+- Exclusive depth. The `depth limiting` test runs with `maxDepth: 1` and expects `example.com/page2` to be absent. `maxDepth` is now inclusive. `/page2` is at depth 1, so it is reserved and fetched. Its own link to `/page2` is already in `seen` and is ignored. The test locks the old off-by-one behavior. It does not describe a `depth-limit` record.
+- Dropped external links. The `ignore external links` test expects `Object.keys(pages).length` to be `1`. The replacement creates a `skipped` / `other-origin` record for `https://external.com/page`, so the result has two records.
+- `sortPages`. [backend/tests/report.test.js](backend/tests/report.test.js) expects rows ordered by descending hit count. Reporters will not re-sort. `pages` stays in creation order, which commit order makes stable. `sortPages` leaves with the hit-count map.
+
+#### Worker loop
+
+One crawl has one frontier and `concurrency` worker loops. A worker is one global slot. There is no second global semaphore. The frontier has a FIFO queue, a `seen` map from canonical key to the one record that owns it, a commit buffer, and `nextCommit` starting at 0.
+
+`take()` waits until either a queued item exists or the crawl is over. It returns the item, or `null` when the crawl is over. A worker that receives `null` returns. It does not treat an empty queue as the end of the crawl.
+
+Loop:
+
+1. `item = await frontier.take()`. `null` means this worker returns.
+2. The record is `fetching` and has its dequeue sequence number, `0`, then `1`, then `2`, in the order `take()` returned items. `take()` assigns both before it returns, not when the response arrives.
+3. Acquire the politeness lease for the item's origin. Milestone 1's `acquire` returns immediately. Milestone 2 makes it wait in a FIFO list when that origin already holds `perOriginLimit` leases.
+4. Check robots at this point in the loop. The position is permanent. In Milestone 1 the function is a stand-in that always allows the URL. It does not fetch, parse, or cache `robots.txt`, and it does not fail closed or apply crawl-delay. Milestone 2 replaces the function. A real disallow is `skipped` / `robots`. A real unavailable file is `skipped` / `robots-unavailable`. Neither contributes links.
+5. If the check allows the URL, run the redirect loop. The HTTP client does not follow redirects. Each hop is a `301`, `302`, `303`, `307`, or `308` with a `Location` header. Resolve `Location` against the current URL. If that throws, or the resolved URL has a username or password, the record is `failed` / `bad-redirect`, `canonicalKey` is not called, and the hop is not requested. A hop whose scheme is not `http` or `https` is `skipped` / `redirect-off-origin`, without `canonicalKey`. Otherwise canonicalize it. A hop that leaves the start origin is `skipped` / `redirect-off-origin` and is not requested. A hop key equal to this record's key, or equal to an earlier hop in this chain, is `failed` / `redirect-loop`. A hop key owned by another record is `skipped` / `duplicate`, and this record does not request it. Otherwise the hop key is an alias in `seen`, owned by this record, and it does not consume a `maxPages` slot. More than 5 hops is `failed` / `redirect-limit`. A redirect status without `Location` is `failed` / `bad-redirect`. The robots check on a hop is the same function as step 4, so in Milestone 1 it allows the hop. Each network attempt calls the lease's `beforeAttempt` before the request. Milestone 1's `beforeAttempt` returns immediately. The request uses the reserved spelling with the fragment removed, not the canonical key.
+6. The request goes through the HTTP client. A classified failure becomes `failed` with that `errorKind` and no links. HTML is parsed for links. Anything else that was fetched and is not HTML is `skipped` / `non-html` and has no links. A skip from robots or from the redirect rules also has no links.
+7. Release the lease.
+8. Commit this sequence number with its link list. This is in a `finally`, so a skip or a classified failure still commits. The link list is empty in those cases. A sequence number that never commits freezes every later commit.
+
+Commit: the finished item goes into a buffer under its sequence number. While the buffer holds `nextCommit`, remove it, apply the reservation rules to its links, and increment `nextCommit`. Links are resolved in document order first. One key keeps its earliest spelling. The survivors are then sorted by key. Reservation then ignores a link that does not parse, has userinfo, or is not `http(s)`. It ignores a key already in `seen` without a new record. Otherwise it records `other-origin`, `depth-limit`, or `page-limit`, or reserves a `queued` record and pushes it. The push is what makes the queue non-empty again. Workers blocked in `take()` receive those items.
+
+Normal termination: the queue is empty and every item already returned by `take()` has been committed. Pending `take()` calls then resolve with `null`. Those workers return. `crawl()` resolves. An empty queue alone is not termination, because a taken item that has not committed can still add links.
+
+Fatal stop: an exception that is not a classified page failure. The frontier stops handing out items and resolves every pending `take()` with `null`, so nobody stays blocked there. `null` only shuts those workers down. It is not a new error. The worker that threw commits an empty link list in `finally` if its sequence number is not committed yet, then rethrows the same exception. Other workers that already hold an item finish and commit that item. While stopping, every commit advances `nextCommit` and reserves nothing, including buffered items released by the empty commit. `crawl()` waits with `Promise.allSettled` and rejects with the first exception after every worker returns. Shutdown must not wrap it or replace it. A classified page failure is not fatal-stop. It commits an empty link list and the crawl continues.
+
+#### Why finish order must not reserve links
+
+`concurrency` is 2. `maxPages` is 4. Politeness and robots allow every request. Response time is the only difference.
+
+The start page `S` is reserved first and taken as sequence 0. Its HTML contains `/c` and then `/b`. Sorted by key, the links are `/b` then `/c`. Commit of sequence 0 reserves `B`, then `C`. The queue is `B`, `C`. Three pages are reserved: `S`, `B`, `C`. One reservation remains.
+
+`B` is taken next, so it is sequence 1. `C` is sequence 2. `C` responds in 10ms and links to `/x` and `/z`. That result waits in the buffer because `nextCommit` is still 1. `B` responds in 500ms and links to `/x` and `/y`.
+
+Commit sequence 1 first. Sorted links are `/x`, `/y`. `/x` takes the last reservation. `/y` is `skipped` / `page-limit`. `discoveredFrom` of `/x` is `B`. Then commit sequence 2. `/x` is already in `seen`, so it is ignored and no second record is created. `/z` is `skipped` / `page-limit`.
+
+Creation order is `S`, `B`, `C`, `/x`, `/y`, `/z`.
+
+If reservation followed network completion, `C` would reserve `/x` at 10ms. `discoveredFrom` of `/x` would be `C`, and the later records would be `/z` then `/y`. The same site would produce a different `pages` array whenever `C` happened to be faster. Fetching stays concurrent. Only reservation waits for dequeue order.
+
+The same example shows termination. After `S` is taken, the queue is empty and `S` has not committed. The crawl is not over. Ending there would drop `B` and `C`. After `C` is in the buffer and `B` has not committed, the queue is empty again. The crawl is still not over. `B` must commit before `C` can reserve, and `B`'s commit is what creates `/x`.
+
 ## Change Log
+
+### 2026-10-08 (second checkpoint correction)
+
+- `canonicalKey` throws `TypeError` for non-`http(s)` schemes. A non-`http(s)` redirect hop is `redirect-off-origin`.
+- The no-decoding rule is limited to the path. The query is normalized by `URLSearchParams`, and the non-UTF-8 collision is a known limitation.
+- `?` is added only when the serialized query is non-empty, which keeps `?&` idempotent.
+- Fatal-stop: `take()` assigns sequence numbers, a stopping commit advances `nextCommit` and reserves nothing, the first exception wins, and `Promise.allSettled` is used. SIGINT uses the same stopping rule.
+- `startUrl` is a required, validated config field of `crawl(config, deps)`.
+- Milestone 1 requires converting every `test.failing` at once and having none left when it is done. Added a reversed-order spelling case and a fatal-stop fixture test.
+- Corrected the learning-log list of retired tests. Robots tests are retired in Milestone 2.
+
+### 2026-10-08
+
+- Added the Milestone 1 URL equivalence tests and the worker-loop sketch. Neither is approved. The URL policy, frontier, and worker loop are not implemented.
+- Corrected the checkpoint: Milestone 1 robots stand-in, normal termination, fatal-stop, trailing slashes, scheme-specific ports, code-unit query order, `URLSearchParams` pairs, no extra percent-decoding, invalid `canonicalKey`, discovered userinfo, and first-reserved fetch spelling.
+- Renamed "Author checkpoints" to "Checkpoints". The agent now writes every checkpoint artifact (equivalence tests, worker-loop sketch, robots decision table, politeness cases, README design and limitation sections). The author reviews and approves each one before the implementation it describes.
 
 ### 2026-10-07 (architecture review)
 
