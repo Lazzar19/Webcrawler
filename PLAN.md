@@ -403,21 +403,21 @@ Integration tests use a real server, not a `fetch` mock.
 
 **Known behavior of the code today:**
 
-- `[x]` A recursive crawler, config validation, a custom robots parser, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, cycles, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 121 tests.
+- `[x]` A frontier crawl, config validation, a custom robots parser, and a console/CSV report exist under `backend/`.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 129 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
 - `[x]` `npm start` from `backend/` runs `src/main.js`.
 - `[x]` The duplicate root crawler and the Vite starter are gone.
-- `[!]` `config.concurrency` is ignored. A module-level `p-limit(5)` wraps recursive calls. A parent holds its slot while awaiting children queued behind it. With five or more same-host links on the start page and the CLI default depth, all slots wait on queued work, nothing keeps the event loop alive, and the process exits silently without a report.
-- `[!]` `maxPages` records a URL and then skips the fetch when the count is already at the limit. The default is `Infinity`.
-- `[!]` Depth `0` is rejected by `parseInt(...) || 2` in the CLI. With `maxDepth: 0` the start URL is never recorded, and the report crashes on an empty map.
+- `[x]` `concurrency` is the worker count. `p-limit` is gone. A parent no longer holds a slot while waiting for children.
+- `[x]` `maxPages` counts fetch reservations. The default is `50`. `Infinity` is rejected.
+- `[x]` Depth `0` is passed through. It fetches the start URL and records further links as `depth-limit`.
 - `[x]` The canonical key keeps scheme, port, and query. Link extraction reads the raw `href` and resolves it with `new URL` against the document base.
-- `[!]` Scope compares hostnames only. Redirects are followed automatically and never inspected.
-- `[!]` The result map mixes "visited", "fetch failed", and "times seen". Non-HTML pages are stored as successes. A missing `content-type` throws inside the success check. Unread bodies of non-HTML and error responses are never cancelled.
-- `[!]` Page fetches have no timeout, no User-Agent, and no size cap. An invalid start URL throws outside any handler.
-- `[!]` Robots rules are never consulted. `robots-parser` is installed and unused. The custom parser does not decide whether a path is allowed.
-- `[!]` The report writes a CSV onto a guessed Desktop path, including a Windows path when run from WSL. The macOS branch is unreachable. `sortPages` assigns undeclared variables.
+- `[x]` Scope is the start origin. Redirects are hop-by-hop. An off-origin hop is not requested.
+- `[x]` The engine returns `CrawlResult` and `PageResult`. Non-HTML is `skipped` / `non-html`. A missing `Content-Type` is non-HTML. Unread bodies are cancelled.
+- `[!]` Page fetches send a User-Agent and do not follow redirects. They still have no timeout and no size cap. An invalid start URL is a `ConfigError` before any fetch.
+- `[!]` The worker calls an allow-all robots stand-in. `robots-parser` is installed and unused. The custom parser does not decide whether a path is allowed.
+- `[!]` `printReport` still writes a CSV onto a guessed Desktop path, including a Windows path when run from WSL. The macOS branch is unreachable. `npm start` no longer calls it. `sortPages` still sorts by hit count.
 - `[x]` Node is pinned to 24, and ESLint checks `backend/`.
 
 ## Milestones
@@ -451,24 +451,24 @@ URL policy:
 
 - `[x]` Implement the canonical key from Cemented Behavior. In the same change, replace the local stand-in in [backend/tests/url-identity.test.js](backend/tests/url-identity.test.js) with the real module and turn every `test.failing` in that file into `test`. Convert all of them at once. Do not convert only the ones that went red: a `test.failing` that stays green means that case is still wrong.
 - `[x]` Replace string concatenation with `getAttribute('href')` and `new URL(raw, documentBase)`. Cover `./`, `../`, bare relative paths, query-only links, protocol-relative links, `<base href>`, non-`http(s)` schemes, and a base URL that already has a path.
-- `[ ]` Rewrite the existing tests that lock retired behavior: keys without a scheme, `about:blank` resolution, `maxPages: Infinity`, the hit-count map, and `sortPages`.
+- `[ ]` Rewrite the `sortPages` tests. Keys without a scheme, `about:blank` resolution, `maxPages: Infinity`, and the hit-count map are rewritten.
 
 Frontier and workers:
 
-- `[ ]` Replace recursive `p-limit` with one frontier and `concurrency` worker loops. Remove `p-limit`.
-- `[ ]` Implement the reservation rules in their cemented order. Reservation is synchronous.
-- `[ ]` Implement commit order with a sequence number and a commit buffer.
-- `[ ]` Implement the termination condition. `take()` resolves `null` for every waiting worker when the crawl is over.
-- `[ ]` Call the politeness gate's `acquire` and `beforeAttempt` before each fetch. In this milestone both return immediately.
-- `[ ]` Call the robots check at its place in the worker loop. In this milestone the check is the allow-all stand-in. Do not fetch or parse `robots.txt`.
-- `[ ]` Apply inclusive `maxDepth` and reservation-based `maxPages`. Change the default page limit to `50` and reject `Infinity`. Add the new config fields and the unknown-key check.
+- `[x]` Replace recursive `p-limit` with one frontier and `concurrency` worker loops. Remove `p-limit`.
+- `[x]` Implement the reservation rules in their cemented order. Reservation is synchronous.
+- `[x]` Implement commit order with a sequence number and a commit buffer.
+- `[x]` Implement the termination condition. `take()` resolves `null` for every waiting worker when the crawl is over.
+- `[x]` Call the politeness gate's `acquire` and `beforeAttempt` before each fetch. In this milestone both return immediately.
+- `[x]` Call the robots check at its place in the worker loop. In this milestone the check is the allow-all stand-in. Do not fetch or parse `robots.txt`.
+- `[x]` Apply inclusive `maxDepth` and reservation-based `maxPages`. Change the default page limit to `50` and reject `Infinity`. Add the new config fields and the unknown-key check.
 
 Fetch path:
 
-- `[ ]` Move `fetch` into an HTTP client module with `redirect: 'manual'`, User-Agent, `wantBody`, and body cancellation. Timeout, byte limit, and retries arrive in Milestone 2.
-- `[ ]` Implement the redirect loop in the worker with the alias, duplicate, loop, limit, and off-origin rules.
-- `[ ]` Classify HTML by media type. A missing `Content-Type` is non-HTML.
-- `[ ]` Return `PageResult` and `CrawlResult` values in contract shape. Retire the hit-count map.
+- `[x]` Move `fetch` into an HTTP client module with `redirect: 'manual'`, User-Agent, `wantBody`, and body cancellation. Timeout, byte limit, and retries arrive in Milestone 2.
+- `[x]` Implement the redirect loop in the worker with the alias, duplicate, loop, limit, and off-origin rules.
+- `[x]` Classify HTML by media type. A missing `Content-Type` is non-HTML.
+- `[x]` Return `PageResult` and `CrawlResult` values in contract shape. Retire the hit-count map.
 
 Fixture tests:
 
@@ -741,7 +741,21 @@ The same example shows termination. After `S` is taken, the queue is empty and `
 - **How it was verified:** `npm run verify`. The URL identity tests are normal `test` calls and pass. Link tests cover relative paths, query-only links, protocol-relative links, `<base href>`, and ignored schemes. Scheme-less lookups in the crawl tests now use the full key. `maxPages: Infinity`, the hit-count map, and `sortPages` still lock the old result shape. Those change with the frontier and the result contract.
 - **Lesson learned:** The key and the fetched spelling are different strings. `/a/` stays `/a/` in the link list. Only the key drops the slash.
 
+### 2026-10-09 - Frontier and workers
+
+- **Problem:** The crawl was a recursive `p-limit` loop. A parent held a slot while its children waited, `maxPages` could record a URL without fetching it, and the result was a hit-count map.
+- **Chosen solution:** One FIFO frontier and `concurrency` workers. Reservation is synchronous, in the cemented order. `take()` assigns a sequence number, and finished items commit in that order from a buffer. Politeness and robots are immediate allow-all stand-ins at the real call sites. The HTTP client uses `redirect: 'manual'`. The worker follows hops, skips an off-origin hop before requesting it, and returns `PageResult` inside `CrawlResult`. `p-limit` is removed.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 129 tests. Injected-client tests cover cycles, inclusive depth, the page limit, the first reserved spelling, commit order, fatal-stop, and the redirect alias, duplicate, off-origin, and loop cases. The fixture checklist is still open. `fetch-spelling.test.js` is still `test.failing`. `sortPages` still sorts by hit count.
+- **Lesson learned:** Canonicalizing a hop is not the same as staying on the start origin. A `https` hop on another host is a valid key and must still be `redirect-off-origin` before anyone requests it.
+
 ## Change Log
+
+### 2026-10-09 (Frontier and workers)
+
+- Replaced the recursive crawl with a frontier, commit-ordered workers, and `CrawlResult`.
+- `maxPages` defaults to 50 and counts reservations. `maxDepth` is inclusive. `Infinity` is rejected.
+- The HTTP client does not follow redirects. The worker applies the alias, duplicate, loop, limit, and off-origin rules.
+- Politeness and robots are allow-all stand-ins. `p-limit` is removed. Timeout, byte limit, and retries are still Milestone 2.
 
 ### 2026-10-09 (URL policy)
 

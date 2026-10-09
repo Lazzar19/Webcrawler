@@ -13,23 +13,19 @@ This is a hands-on project for learning HTTP, scheduling, and the limits of a si
 
 ## What works today
 
-- Recursive link traversal with a depth setting and a page-limit setting
-- Same-host filtering and a visited-URL map
-- A fixed pool of five in-flight fetches
-- A `robots.txt` parser that the crawl does not call yet
-- Jest tests that mock the network
+- A frontier of workers, with inclusive depth and a reservation page limit
+- Same-origin filtering and one record per canonical key
+- Hop-by-hop redirects that stay on the start origin
+- Jest tests with an injected HTTP client
 
 ## Still open
 
-These are known gaps, not future ideas. Milestone 1 replaces the crawl loop instead of patching it in place.
+These are known gaps, not future ideas. The remaining Milestone 1 work is the fixture checklist. Milestones 2 and 3 own the rest.
 
-- Concurrency is hard-coded. `config.concurrency` is ignored, and the recursive limiter can stall.
-- `maxPages` defaults to unlimited, and the current check can record a URL without fetching it.
-- URL identity drops the scheme, port, and query. Relative links are joined by string concatenation.
-- The result map mixes visited pages, failures, and repeat counts.
-- Page fetches have no timeout, no User-Agent, and no size cap.
-- `robots.txt` is not enforced. The installed `robots-parser` package is unused.
-- The CSV report is written to a guessed Desktop path.
+- Page fetches have no timeout and no size cap.
+- Robots is an allow-all stand-in. `robots-parser` is unused.
+- `printReport` still writes a CSV onto a guessed Desktop path. `npm start` does not call it.
+- `sortPages` still sorts by hit count.
 
 ## Project structure
 
@@ -80,7 +76,6 @@ npm start -- <url>
 | Package | Purpose |
 |---|---|
 | `jsdom` | HTML parsing and link extraction |
-| `p-limit` | Concurrency limiter for async requests. The current crawl can stall under it. |
 | `robots-parser` | Installed for later robots enforcement. The crawl does not call it yet. |
 | `jest` | Testing framework (dev dependency) |
 | `eslint` | Linter (dev dependency) |
