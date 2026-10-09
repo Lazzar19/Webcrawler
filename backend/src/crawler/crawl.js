@@ -1,6 +1,5 @@
-
-const {JSDOM} = require('jsdom');
 const pLimit = require('p-limit');
+const { canonicalKey, extractLinks } = require("./url-policy");
 const limit = pLimit(5);
 
 async function crawlPage(baseURL,currentURL,pages, currentDepth = 0 , config) {
@@ -11,7 +10,7 @@ async function crawlPage(baseURL,currentURL,pages, currentDepth = 0 , config) {
         return pages;
     }
 
-    const normalizedCurrentURL = normalizeURL(currentURL);
+    const normalizedCurrentURL = canonicalKey(currentURL);
     if(pages[normalizedCurrentURL] > 0) {
         pages[normalizedCurrentURL] ++;
         return pages;
@@ -47,7 +46,7 @@ async function crawlPage(baseURL,currentURL,pages, currentDepth = 0 , config) {
         }
         //parse to html
         const htmlBody =  await response.text();
-        const nextURLs = getURLs(htmlBody,baseURL);
+        const nextURLs = getURLs(htmlBody, currentURL);
 
             
         const crawlPromises = nextURLs.map(url =>
@@ -66,53 +65,11 @@ async function crawlPage(baseURL,currentURL,pages, currentDepth = 0 , config) {
 }
 
 
-function getURLs(htmlBody,baseURL) {
-    const urls = [];
-    const dom = new JSDOM(htmlBody);
-    const linkElements = dom.window.document.querySelectorAll("a");
-    for(const link of linkElements) {
-
-        if(!link.href) {
-            continue;
-        };
-
-        if(link.href.slice(0,1) === '/') { // first character /
-            //relative
-            try{
-                const urlObject = new URL(`${baseURL}${link.href}`);
-                urls.push(urlObject.href);
-            } catch (err) {
-                console.log(`error with relative url: ${err.message}`)
-            }
-
-           
-        } else {
-
-            //absolute
-           try{
-                const urlObject = new URL(link.href);
-                urls.push(urlObject.href);
-           } catch (err) {
-                console.log(`erro with absolute url: ${err.message}`);
-           }
-        }
-    }
-    return urls;
+function getURLs(htmlBody, baseURL) {
+    return extractLinks(htmlBody, baseURL);
 }
 
-
-function normalizeURL(urlString) {
-    const urlObject = new URL(urlString);
-    const hostPath =  `${urlObject.hostname}${urlObject.pathname}`;
-
-    if(hostPath.length > 0 && hostPath.slice(-1) == '/') {
-        return hostPath.slice(0,-1); // return substring from first to last char
-    }
-    return hostPath;
-};
-
 module.exports = {
-    normalizeURL,
     getURLs,
     crawlPage
 }

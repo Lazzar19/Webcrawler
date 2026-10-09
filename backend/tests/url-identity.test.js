@@ -1,14 +1,5 @@
 const { test, expect } = require("@jest/globals");
-
-// Milestone 1 checkpoint. This is the URL-identity spec from PLAN.md.
-// canonicalKey is intentionally not the policy. It returns a sentinel so
-// each assertion runs and fails. test.failing keeps `npm test` green until
-// the author approves implementation. The first implementation step is to
-// delete this function, implement the key, and replace test.failing with test.
-
-function canonicalKey() {
-  return "NOT-IMPLEMENTED";
-}
+const { canonicalKey } = require("../src/crawler/url-policy");
 
 const KEY_CASES = [
   {
@@ -170,7 +161,7 @@ const KEY_CASES = [
 ];
 
 for (const row of KEY_CASES) {
-  test.failing(row.name, () => {
+  test(row.name, () => {
     const key = canonicalKey(row.input);
     expect(key).toBe(row.expected);
     expect(canonicalKey(key)).toBe(key);
@@ -178,7 +169,7 @@ for (const row of KEY_CASES) {
 }
 
 
-test.failing("percent-escapes in the query are normalized by URLSearchParams", () => {
+test("percent-escapes in the query are normalized by URLSearchParams", () => {
   for (const input of [
     "https://example.com/a?q=%7e",
     "https://example.com/a?q=%7E",
@@ -188,12 +179,12 @@ test.failing("percent-escapes in the query are normalized by URLSearchParams", (
   }
 });
 
-test.failing("non-http(s) schemes throw TypeError", () => {
+test("non-http(s) schemes throw TypeError", () => {
   expect(() => canonicalKey("mailto:x@example.com")).toThrow(TypeError);
   expect(() => canonicalKey("ftp://example.com/a")).toThrow(TypeError);
 });
 
-test.failing("different query values stay different keys", () => {
+test("different query values stay different keys", () => {
   expect(canonicalKey("https://example.com/a?id=1")).toBe(
     "https://example.com/a?id=1"
   );
@@ -205,17 +196,17 @@ test.failing("different query values stay different keys", () => {
   );
 });
 
-test.failing("a missing query and an empty query are one key", () => {
+test("a missing query and an empty query are one key", () => {
   expect(canonicalKey("https://example.com/a")).toBe("https://example.com/a");
   expect(canonicalKey("https://example.com/a?")).toBe("https://example.com/a");
 });
 
-test.failing("query name and empty value stay one key", () => {
+test("query name and empty value stay one key", () => {
   expect(canonicalKey("https://example.com/a?a")).toBe("https://example.com/a?a=");
   expect(canonicalKey("https://example.com/a?a=")).toBe("https://example.com/a?a=");
 });
 
-test.failing("plus and percent-encoded space are one query value", () => {
+test("plus and percent-encoded space are one query value", () => {
   expect(canonicalKey("https://example.com/a?q=b%20a")).toBe(
     "https://example.com/a?q=b+a"
   );
@@ -224,7 +215,7 @@ test.failing("plus and percent-encoded space are one query value", () => {
   );
 });
 
-test.failing("percent-encoded tildes of different case stay different keys", () => {
+test("percent-encoded tildes of different case stay different keys", () => {
   expect(canonicalKey("https://example.com/%7e")).toBe("https://example.com/%7e");
   expect(canonicalKey("https://example.com/%7E")).toBe("https://example.com/%7E");
   expect(canonicalKey("https://example.com/%7e")).not.toBe(
@@ -232,7 +223,7 @@ test.failing("percent-encoded tildes of different case stay different keys", () 
   );
 });
 
-test.failing("percent-encoded slashes of different case stay different keys", () => {
+test("percent-encoded slashes of different case stay different keys", () => {
   expect(canonicalKey("https://example.com/a%2Fb")).not.toBe(
     canonicalKey("https://example.com/a%2fb")
   );
@@ -241,17 +232,33 @@ test.failing("percent-encoded slashes of different case stay different keys", ()
   );
 });
 
-test.failing("invalid input throws TypeError and is not a sentinel key", () => {
-  expect(() => canonicalKey("not a url")).toThrow(TypeError);
-  expect(() => canonicalKey("/a")).toThrow(TypeError);
+test("invalid input throws TypeError and is not a sentinel key", () => {
+  for (const input of ["not a url", "/a"]) {
+    let thrown = null;
+    try {
+      canonicalKey(input);
+    } catch (error) {
+      thrown = error;
+    }
+    let fromParser = null;
+    try {
+      new URL(input);
+    } catch (error) {
+      fromParser = error;
+    }
+    expect(thrown).not.toBeNull();
+    expect(thrown.name).toBe("TypeError");
+    expect(thrown.constructor).toBe(fromParser.constructor);
+    expect(thrown.message).toBe(fromParser.message);
+  }
 });
 
-test.failing("userinfo is not stripped into a key without credentials", () => {
+test("userinfo is not stripped into a key without credentials", () => {
   expect(() => canonicalKey("https://user:pw@example.com/a")).toThrow(TypeError);
   expect(() => canonicalKey("https://user@example.com/a")).toThrow(TypeError);
 });
 
-test.failing("spellings that share a canonical key", () => {
+test("spellings that share a canonical key", () => {
   const aliases = [
     ["https://example.com/old/", "https://example.com/old", "https://example.com/old"],
     [
@@ -271,7 +278,7 @@ test.failing("spellings that share a canonical key", () => {
   }
 });
 
-test.failing("these pairs stay different keys", () => {
+test("these pairs stay different keys", () => {
   const distinct = [
     ["http://example.com/a", "https://example.com/a"],
     ["https://www.example.com/a", "https://example.com/a"],

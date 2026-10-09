@@ -404,7 +404,7 @@ Integration tests use a real server, not a `fetch` mock.
 **Known behavior of the code today:**
 
 - `[x]` A recursive crawler, config validation, a custom robots parser, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers normalization happy paths, some HTML extraction, cycles, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 114 tests.
+- `[x]` Jest covers the canonical key, link resolution, cycles, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 121 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
 - `[x]` `npm start` from `backend/` runs `src/main.js`.
@@ -412,7 +412,7 @@ Integration tests use a real server, not a `fetch` mock.
 - `[!]` `config.concurrency` is ignored. A module-level `p-limit(5)` wraps recursive calls. A parent holds its slot while awaiting children queued behind it. With five or more same-host links on the start page and the CLI default depth, all slots wait on queued work, nothing keeps the event loop alive, and the process exits silently without a report.
 - `[!]` `maxPages` records a URL and then skips the fetch when the count is already at the limit. The default is `Infinity`.
 - `[!]` Depth `0` is rejected by `parseInt(...) || 2` in the CLI. With `maxDepth: 0` the start URL is never recorded, and the report crashes on an empty map.
-- `[!]` Normalization drops the scheme, port, and query. Link extraction concatenates strings and reads the DOM `href` of a document whose base is `about:blank`, so only root-relative links on a root base URL work. `./a`, `a`, and `//host/a` resolve wrongly or are dropped.
+- `[x]` The canonical key keeps scheme, port, and query. Link extraction reads the raw `href` and resolves it with `new URL` against the document base.
 - `[!]` Scope compares hostnames only. Redirects are followed automatically and never inspected.
 - `[!]` The result map mixes "visited", "fetch failed", and "times seen". Non-HTML pages are stored as successes. A missing `content-type` throws inside the success check. Unread bodies of non-HTML and error responses are never cancelled.
 - `[!]` Page fetches have no timeout, no User-Agent, and no size cap. An invalid start URL throws outside any handler.
@@ -449,8 +449,8 @@ Setup:
 
 URL policy:
 
-- `[ ]` Implement the canonical key from Cemented Behavior. In the same change, replace the local stand-in in [backend/tests/url-identity.test.js](backend/tests/url-identity.test.js) with the real module and turn every `test.failing` in that file into `test`. Convert all of them at once. Do not convert only the ones that went red: a `test.failing` that stays green means that case is still wrong.
-- `[ ]` Replace string concatenation with `getAttribute('href')` and `new URL(raw, documentBase)`. Cover `./`, `../`, bare relative paths, query-only links, protocol-relative links, `<base href>`, non-`http(s)` schemes, and a base URL that already has a path.
+- `[x]` Implement the canonical key from Cemented Behavior. In the same change, replace the local stand-in in [backend/tests/url-identity.test.js](backend/tests/url-identity.test.js) with the real module and turn every `test.failing` in that file into `test`. Convert all of them at once. Do not convert only the ones that went red: a `test.failing` that stays green means that case is still wrong.
+- `[x]` Replace string concatenation with `getAttribute('href')` and `new URL(raw, documentBase)`. Cover `./`, `../`, bare relative paths, query-only links, protocol-relative links, `<base href>`, non-`http(s)` schemes, and a base URL that already has a path.
 - `[ ]` Rewrite the existing tests that lock retired behavior: keys without a scheme, `about:blank` resolution, `maxPages: Infinity`, the hit-count map, and `sortPages`.
 
 Frontier and workers:
@@ -678,13 +678,13 @@ Included in the Milestone 1 checkpoint approved on 2026-10-08.
 
 #### Retired behavior still locked by old tests
 
-These tests were not deleted or weakened. The Milestone 1 checklist item "Rewrite the existing tests that lock retired behavior" is what changes them, and only after this checkpoint is approved.
+The URL policy step rewrote the scheme-less key tests and the `about:blank` resolution test. The rest still lock the old crawl. They change when the frontier and the result contract replace that behavior.
 
-- Keys without a scheme. [backend/tests/crawl.test.js](backend/tests/crawl.test.js) expects `normalizeURL` to return `blog.boot.dev/path` for both `http` and `https`, and the crawl tests look up `example.com/pageA`, `example.com/file`, and `example.com`. The replacement keys keep the scheme, so `http` and `https` are different, and a lookup is the full key such as `https://example.com/pageA`.
-- `about:blank` resolution. No current test contains the string `about:blank`. The implementation reads the DOM `href` of a document whose base is `about:blank`, so a relative value that is not root-relative is returned unresolved, and `new URL` then rejects it. The test that locks this is `getURLsfromHTML invalid urls` in [backend/tests/crawl.test.js](backend/tests/crawl.test.js). It expects `href="invalid"` on base `https://blog.boot.dev` to produce no link. Under the new rules, `new URL("invalid", documentBase)` resolves to `https://blog.boot.dev/invalid`. The other `getURLs` tests do not lock retired behavior. They expect resolved spellings such as `https://blog.boot.dev/path/`, and resolved spellings keep their trailing slash. Only the key drops it. Those tests change only for the new signature, which resolves against the document base.
+- Keys without a scheme. Rewritten. Lookups are full keys such as `https://example.com/pageA`, and `http` and `https` stay different.
+- `about:blank` resolution. Rewritten. `href="invalid"` on base `https://blog.boot.dev` resolves to `https://blog.boot.dev/invalid`. Resolved spellings still keep a trailing slash. Only the key drops it.
 - `maxPages: Infinity`. [backend/tests/crawl-config.test.js](backend/tests/crawl-config.test.js) accepts `Infinity` and expects it as the default when only `maxDepth` is overridden. The replacement rejects `Infinity`. The default is `50`.
-- The hit-count map. The cycle test expects `example.com/pageA` to be at least `1` and `example.com/pageB` to be `1`. Non-HTML responses expect `{'example.com/file': 1}`. The replacement stores a `PageResult` per key. A non-HTML response is `skipped` / `non-html`. Repeat discoveries do not increment a count.
-- Exclusive depth. The `depth limiting` test runs with `maxDepth: 1` and expects `example.com/page2` to be absent. `maxDepth` is now inclusive. `/page2` is at depth 1, so it is reserved and fetched. Its own link to `/page2` is already in `seen` and is ignored. The test locks the old off-by-one behavior. It does not describe a `depth-limit` record.
+- The hit-count map. The cycle test expects `https://example.com/pageA` to be at least `1` and `https://example.com/pageB` to be `1`. Non-HTML responses expect `{'https://example.com/file': 1}`. The replacement stores a `PageResult` per key. A non-HTML response is `skipped` / `non-html`. Repeat discoveries do not increment a count.
+- Exclusive depth. The `depth limiting` test runs with `maxDepth: 1` and expects `https://example.com/page2` to be absent. `maxDepth` is now inclusive. `/page2` is at depth 1, so it is reserved and fetched. Its own link to `/page2` is already in `seen` and is ignored. The test locks the old off-by-one behavior. It does not describe a `depth-limit` record.
 - Dropped external links. The `ignore external links` test expects `Object.keys(pages).length` to be `1`. The replacement creates a `skipped` / `other-origin` record for `https://external.com/page`, so the result has two records.
 - `sortPages`. [backend/tests/report.test.js](backend/tests/report.test.js) expects rows ordered by descending hit count. Reporters will not re-sort. `pages` stays in creation order, which commit order makes stable. `sortPages` leaves with the hit-count map.
 
@@ -734,7 +734,19 @@ The same example shows termination. After `S` is taken, the queue is empty and `
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 114 tests. The new clock, logger, and fixture tests pass. The checkpoint tests are still `test.failing`.
 - **Lesson learned:** The linter's first job was the code that already existed. `sortPages` assigned `aHits` and `bHits` without declaring them, and two test imports were unused. Those are fixed. The crawl bugs stay until their own steps.
 
+### 2026-10-09 - URL policy
+
+- **Problem:** Pages were identified by host plus path, and links were joined by string concatenation against a document whose base was `about:blank`.
+- **Chosen solution:** `canonicalKey` follows the cemented procedure. `extractLinks` reads `getAttribute('href')` and resolves with `new URL` against the first `<base href>`, or the page URL. The recursive crawl now stores those keys and extracts links that way. It is still the old loop.
+- **How it was verified:** `npm run verify`. The URL identity tests are normal `test` calls and pass. Link tests cover relative paths, query-only links, protocol-relative links, `<base href>`, and ignored schemes. Scheme-less lookups in the crawl tests now use the full key. `maxPages: Infinity`, the hit-count map, and `sortPages` still lock the old result shape. Those change with the frontier and the result contract.
+- **Lesson learned:** The key and the fetched spelling are different strings. `/a/` stays `/a/` in the link list. Only the key drops the slash.
+
 ## Change Log
+
+### 2026-10-09 (URL policy)
+
+- Implemented `canonicalKey` and `extractLinks`. The URL identity tests now call the real module.
+- The recursive crawl stores canonical keys and resolves links against the page URL. The frontier is still the old loop.
 
 ### 2026-10-08 (Milestone 1 setup)
 

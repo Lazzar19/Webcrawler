@@ -1,4 +1,5 @@
-const {normalizeURL,getURLs, crawlPage} = require('../src/crawler/crawl.js');
+const {getURLs, crawlPage} = require('../src/crawler/crawl.js');
+const { canonicalKey } = require("../src/crawler/url-policy");
 const {test,expect} = require("@jest/globals");
 
 const { createCrawlConfig } = require("../src/crawler/crawl-config.js");
@@ -10,34 +11,23 @@ beforeEach(() => {
     fetch.mockClear();
 });
 
-test('normalizeURL strip protocol https', () => {
-    const input = 'https://blog.boot.dev/path';
-    const actual = normalizeURL(input);
-    const expected = 'blog.boot.dev/path';
-    expect(actual).toEqual(expected);
+test('canonical key keeps the scheme', () => {
+    expect(canonicalKey('https://blog.boot.dev/path')).toBe('https://blog.boot.dev/path');
 })
 
-
-test('normalizeURL strip trailing slash',() => {
-    const input = 'https://blog.boot.dev/path/'; // dodata /
-    const actual = normalizeURL(input);
-    const expected = 'blog.boot.dev/path';
-    expect(actual).toEqual(expected)
+test('canonical key removes one trailing slash', () => {
+    expect(canonicalKey('https://blog.boot.dev/path/')).toBe('https://blog.boot.dev/path');
 })
 
-test('normalizeURL capitals', () => {
-    const input = 'https://BLOG.boot.dev/path';
-    const actual = normalizeURL(input);
-    const expected = 'blog.boot.dev/path';
-    expect(actual).toEqual(expected);
+test('canonical key lowercases the hostname and keeps the scheme', () => {
+    expect(canonicalKey('https://BLOG.boot.dev/path')).toBe('https://blog.boot.dev/path');
 })
 
-
-test('normalizeURL http', () => {
-    const input = 'http://blog.boot.dev/path';
-    const actual = normalizeURL(input);
-    const expected = 'blog.boot.dev/path';
-    expect(actual).toEqual(expected);
+test('http and https stay different keys', () => {
+    expect(canonicalKey('http://blog.boot.dev/path')).toBe('http://blog.boot.dev/path');
+    expect(canonicalKey('http://blog.boot.dev/path')).not.toBe(
+        canonicalKey('https://blog.boot.dev/path')
+    );
 })
 
 
@@ -113,7 +103,7 @@ test('getURLsfromHTML invalid urls', () => {
     `
     const inputURL = 'https://blog.boot.dev';
     const actual = getURLs(inputBody,inputURL);
-    const expected = [];
+    const expected = ['https://blog.boot.dev/invalid'];
     expect(actual).toEqual(expected);
     
 })
@@ -218,10 +208,10 @@ test("cyclic pages ", async () => {
     });
 
     const pages = await crawlPage("https://example.com", 'https://example.com/pageA', {},0, config);
-    expect(pages['example.com/pageA']).toBeDefined();
-    expect(pages['example.com/pageB']).toBeDefined();
-    expect(pages['example.com/pageA']).toBeGreaterThanOrEqual(1);
-    expect(pages['example.com/pageB']).toBe(1);
+    expect(pages['https://example.com/pageA']).toBeDefined();
+    expect(pages['https://example.com/pageB']).toBeDefined();
+    expect(pages['https://example.com/pageA']).toBeGreaterThanOrEqual(1);
+    expect(pages['https://example.com/pageB']).toBe(1);
 
 })
 
@@ -248,7 +238,7 @@ test.each([
     });
 
     const pages = await crawlPage('https://example.com', 'https://example.com/file',{},0, config);
-    expect(pages).toEqual({'example.com/file': 1});
+    expect(pages).toEqual({'https://example.com/file': 1});
 
 });
 
@@ -269,7 +259,7 @@ test(' text/html test with charset param', async () => {
     });
 
     const pages = await crawlPage('https://example.com', 'https://example.com', {}, 0, config);
-    expect(pages['example.com']).toBeDefined();
+    expect(pages['https://example.com/']).toBeDefined();
 
 })
 
@@ -305,7 +295,7 @@ test('ignore external links ', async() => {
     });
 
     const pages = await crawlPage('https://example.com', 'https://example.com', {}, 0, config);
-    expect(pages['example.com']).toBeDefined();
+    expect(pages['https://example.com/']).toBeDefined();
     expect(Object.keys(pages).length).toBe(1); // just one page, external link being ignored
 
 })
@@ -336,8 +326,8 @@ test('depth limiting', async () => {
     });
 
     const pages = await crawlPage('https://example.com', "https://example.com", {}, 0, config);
-    expect(pages['example.com']).toBeDefined();
-    expect(pages['example.com/page2']).toBeUndefined();
+    expect(pages['https://example.com/']).toBeDefined();
+    expect(pages['https://example.com/page2']).toBeUndefined();
     expect(Object.keys(pages).length).toBe(1);
 
 })
