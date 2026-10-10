@@ -21,6 +21,52 @@ function htmlOptions(maxBytes) {
   };
 }
 
+function fetchFailed(code) {
+  const error = new TypeError("fetch failed");
+  error.cause = { code };
+  return error;
+}
+
+test.each([
+  ["ENOTFOUND", "dns"],
+  ["EAI_AGAIN", "dns"],
+  ["ECONNREFUSED", "connect"],
+  ["UND_ERR_CONNECT_TIMEOUT", "connect"],
+  ["ECONNRESET", "reset"],
+  ["UND_ERR_SOCKET", "reset"],
+  ["EPIPE", "reset"],
+  ["CERT_HAS_EXPIRED", "tls"],
+  ["ERR_TLS_CERT_ALTNAME_INVALID", "tls"],
+  ["DEPTH_ZERO_SELF_SIGNED_CERT", "tls"],
+  ["EHOSTUNREACH", "connect"],
+])("cause.code %s is %s", async (code, kind) => {
+  const http = client(() => {
+    throw fetchFailed(code);
+  });
+
+  const pending = http.get("https://example.com/", htmlOptions(1000));
+  await expect(pending).rejects.toMatchObject({
+    name: "FetchError",
+    kind,
+    attempts: 1,
+    message: `fetch failed (${code})`,
+  });
+});
+
+test("a code on the error itself is mapped the same way", async () => {
+  const error = new TypeError("fetch failed");
+  error.code = "ENOTFOUND";
+  const http = client(() => {
+    throw error;
+  });
+
+  const pending = http.get("https://example.com/", htmlOptions(1000));
+  await expect(pending).rejects.toMatchObject({
+    kind: "dns",
+    message: "fetch failed (ENOTFOUND)",
+  });
+});
+
 test("a timeout while waiting for headers is FetchError timeout", async () => {
   const http = client((_url, { signal }) => new Promise((_resolve, reject) => {
     signal.addEventListener("abort", () => {

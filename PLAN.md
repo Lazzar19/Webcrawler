@@ -417,7 +417,7 @@ Integration tests use a real server, not a `fetch` mock.
 **Known behavior of the code today:**
 
 - `[x]` A frontier crawl, config validation, a custom robots parser, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 154 tests.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 166 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
 - `[x]` `npm start` from `backend/` runs `src/main.js`.
@@ -503,7 +503,7 @@ Fixture tests:
 Checkpoint approved 2026-10-10. The decision table and politeness cases in the learning log stand, as corrected in Cemented Behavior. Implementation may start.
 
 - `[x]` Add the per-attempt timeout and the streaming byte limit to the HTTP client. Count decoded bytes as they arrive. Do not load the whole body and measure it afterwards.
-- `[ ]` Map network errors to the error taxonomy through `cause.code`. Unit-test each kind with an injected `fetchImpl`.
+- `[x]` Map network errors to the error taxonomy through `cause.code`. Unit-test each kind with an injected `fetchImpl`.
 - `[ ]` Retry only the cemented cases, with backoff before `beforeAttempt`, the `Retry-After` rule, and the injected clock. Race retry sleeps against the fatal-stop abort. Do not abort the `fetch`.
 - `[ ]` Replace the robots stand-in with a manager on `robots-parser`. Single-flight cache, status table, fail-closed, product-token match, manager-owned robots redirect loop, lease reuse. `check(url, { beforeAttempt })` stays at worker step 4 and on every page redirect hop.
 - `[ ]` Implement the politeness gate: per-origin FIFO leases, `nextAllowedAt` set before waiting, gap on every attempt, crawl-delay from the robots manager after a successful parse, `waitedMs` as specified.
@@ -886,7 +886,18 @@ These replace the looser readings from the first draft of this checkpoint.
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 154 tests. A hung fixture response becomes one failed page. A declared body over the limit is `too-large`.
 - **Lesson learned:** The timeout has to cover the body read, not only the headers. Cancelling a stream after the limit is what keeps the connection from staying open.
 
+### 2026-10-10 - Network error kinds
+
+- **Problem:** A down host has to be a page failure. The client already read `cause.code`, but nothing locked the table, so a wrong kind could become a fatal stop.
+- **Chosen solution:** Injected `fetchImpl` throws `TypeError('fetch failed')` with `cause.code`. `ENOTFOUND` and `EAI_AGAIN` are `dns`. `ECONNREFUSED` and `UND_ERR_CONNECT_TIMEOUT` are `connect`. `ECONNRESET`, `UND_ERR_SOCKET`, and `EPIPE` are `reset`. `CERT_*`, `ERR_TLS_*`, and `DEPTH_ZERO_SELF_SIGNED_CERT` are `tls`. An unknown code is `connect`, and the raw code stays in `errorMessage`. `TimeoutError` stays `timeout`.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 166 tests. Each code above is one case.
+- **Lesson learned:** The kind is decided before the crawler sees the error. If the client wraps it as a generic failure, the crawl stops instead of recording the page.
+
 ## Change Log
+
+### 2026-10-10 (Network error kinds)
+
+- Locked `cause.code` to `dns`, `connect`, `reset`, `tls`, and `timeout`. An unknown code is `connect` and stays in the message.
 
 ### 2026-10-10 (HTTP timeout and byte limit)
 
