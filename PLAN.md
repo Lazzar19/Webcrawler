@@ -404,7 +404,7 @@ Integration tests use a real server, not a `fetch` mock.
 **Known behavior of the code today:**
 
 - `[x]` A frontier crawl, config validation, a custom robots parser, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, the frontier, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 129 tests.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 141 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
 - `[x]` `npm start` from `backend/` runs `src/main.js`.
@@ -472,14 +472,14 @@ Fetch path:
 
 Fixture tests:
 
-- `[ ]` Depth `0`, `1`, and `2`.
-- `[ ]` Page limit, with skipped `page-limit` records.
-- `[ ]` Cycles and duplicate links.
-- `[ ]` Identical `pages` arrays for `concurrency` 1 and 5 when routes have different response delays.
-- `[ ]` A redirect alias that does not consume a page slot, a redirect to an already reserved key, an off-origin redirect that is never requested, and a redirect loop.
-- `[ ]` A fan-out site (ten links per page, depth 2, concurrency 5) that would stall the old limiter.
-- `[ ]` The first reserved spelling is the request URL: `/a/` is requested when it is reserved before `/a`, `/a` is requested when it comes first, and `?q=b%20a` is requested with `%20`. A discovered link with userinfo is not requested and has no record. These are the tests in [backend/tests/fetch-spelling.test.js](backend/tests/fetch-spelling.test.js). Point them at the real `crawl()` and turn every `test.failing` into `test`, all at once, when the crawler exists. Move them onto the shared fixture server.
-- `[ ]` Fatal-stop: an injected HTTP client that throws an unclassified error makes `crawl()` reject with that same error object, after every worker has returned, and nothing stays pending.
+- `[x]` Depth `0`, `1`, and `2`.
+- `[x]` Page limit, with skipped `page-limit` records.
+- `[x]` Cycles and duplicate links.
+- `[x]` Identical `pages` arrays for `concurrency` 1 and 5 when routes have different response delays.
+- `[x]` A redirect alias that does not consume a page slot, a redirect to an already reserved key, an off-origin redirect that is never requested, and a redirect loop.
+- `[x]` A fan-out site (ten links per page, depth 2, concurrency 5) that would stall the old limiter.
+- `[x]` The first reserved spelling is the request URL: `/a/` is requested when it is reserved before `/a`, `/a` is requested when it comes first, and `?q=b%20a` is requested with `%20`. A discovered link with userinfo is not requested and has no record. These are the tests in [backend/tests/fetch-spelling.test.js](backend/tests/fetch-spelling.test.js). Point them at the real `crawl()` and turn every `test.failing` into `test`, all at once, when the crawler exists. Move them onto the shared fixture server.
+- `[x]` Fatal-stop: an injected HTTP client that throws an unclassified error makes `crawl()` reject with that same error object, after every worker has returned, and nothing stays pending.
 
 **Done when:** those tests pass against the local server, lint passes, no `test.failing` remains in `url-identity.test.js` or `fetch-spelling.test.js`, and the author can redraw the queue, the commit buffer, and the termination condition without opening the file.
 
@@ -748,7 +748,19 @@ The same example shows termination. After `S` is taken, the queue is empty and `
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 129 tests. Injected-client tests cover cycles, inclusive depth, the page limit, the first reserved spelling, commit order, fatal-stop, and the redirect alias, duplicate, off-origin, and loop cases. The fixture checklist is still open. `fetch-spelling.test.js` is still `test.failing`. `sortPages` still sorts by hit count.
 - **Lesson learned:** Canonicalizing a hop is not the same as staying on the start origin. A `https` hop on another host is a valid key and must still be `redirect-off-origin` before anyone requests it.
 
+### 2026-10-10 - Fixture tests
+
+- **Problem:** The frontier behavior was locked by an injected HTTP client. The plan requires the same cases against the local server, including the spelling tests that were still `test.failing`.
+- **Chosen solution:** [backend/tests/fixtures/crawl.test.js](backend/tests/fixtures/crawl.test.js) drives `crawl()` through `createFixtureServer`. It covers depth 0, 1, and 2, the page limit, cycles, commit order under concurrency 1 and 5, redirects, and a 10-by-10 fan-out. [backend/tests/fetch-spelling.test.js](backend/tests/fetch-spelling.test.js) now calls the real `crawl()` on that server. Fatal-stop still uses an injected client, and it waits until the other worker finishes before `crawl()` rejects.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 141 tests. No `test.failing` remains. `sortPages` still sorts by hit count.
+- **Lesson learned:** Two fixture servers get two ports, so the page arrays match only after the origin is removed. The record order does not.
+
 ## Change Log
+
+### 2026-10-10 (Fixture tests)
+
+- Locked depth, page limit, cycles, commit order, redirects, fan-out, and fetch spelling against the local fixture server.
+- Turned every `test.failing` in the spelling tests into `test`. Fatal-stop rejects with the original error after the other worker returns.
 
 ### 2026-10-09 (Frontier and workers)
 

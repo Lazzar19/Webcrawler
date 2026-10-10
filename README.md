@@ -16,11 +16,11 @@ This is a hands-on project for learning HTTP, scheduling, and the limits of a si
 - A frontier of workers, with inclusive depth and a reservation page limit
 - Same-origin filtering and one record per canonical key
 - Hop-by-hop redirects that stay on the start origin
-- Jest tests with an injected HTTP client
+- Jest tests against the local fixture server and an injected HTTP client
 
 ## Still open
 
-These are known gaps, not future ideas. The remaining Milestone 1 work is the fixture checklist. Milestones 2 and 3 own the rest.
+These are known gaps, not future ideas. The remaining Milestone 1 item is the `sortPages` rewrite. Milestones 2 and 3 own the rest.
 
 - Page fetches have no timeout and no size cap.
 - Robots is an allow-all stand-in. `robots-parser` is unused.

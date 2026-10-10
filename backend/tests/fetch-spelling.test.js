@@ -1,141 +1,123 @@
-const http = require("http");
-const { test, expect } = require("@jest/globals");
+const { crawl } = require("../src/crawler/crawl");
+const { createFixtureServer } = require("./fixtures/server");
 
-// Milestone 1 checkpoint. These tests describe the fetch spelling and the
-// discovered-userinfo rule. crawl() is not the production crawler. Each
-// test is test.failing until that crawler exists. Do not point them at the
-// current recursive crawlPage. That function locks a different contract.
+function html(body) {
+  return (_req, res) => {
+    res.setHeader("content-type", "text/html; charset=utf-8");
+    res.end(body);
+  };
+}
 
-async function crawl() {
-  throw new Error(
-    "NOT-IMPLEMENTED: fetch spelling waits for the Milestone 1 crawler."
+async function withServer(routes, run) {
+  const server = createFixtureServer({ routes });
+  await server.listen();
+  try {
+    return await run(server);
+  } finally {
+    await server.close();
+  }
+}
+
+test("the first reserved spelling is fetched, not the canonical path", async () => {
+  await withServer(
+    {
+      "/": html('<a href="/a/"></a><a href="/a"></a>'),
+      "/a/": html("<html></html>"),
+      "/a": html("<html></html>"),
+    },
+    async (server) => {
+      await crawl({
+        startUrl: `${server.origin}/`,
+        maxDepth: 1,
+        maxPages: 10,
+        concurrency: 1,
+        minIntervalMs: 0,
+      });
+      const spellings = server.requests
+        .map((request) => request.path)
+        .filter((path) => path === "/a/" || path === "/a");
+      expect(spellings).toEqual(["/a/"]);
+    }
   );
-}
-
-function listen(handler) {
-  return new Promise((resolve) => {
-    const server = http.createServer(handler);
-    server.listen(0, "127.0.0.1", () => resolve(server));
-  });
-}
-
-function close(server) {
-  return new Promise((resolve) => server.close(resolve));
-}
-
-test.failing("the first reserved spelling is fetched, not the canonical path", async () => {
-  const requested = [];
-  const server = await listen((req, res) => {
-    requested.push(req.url);
-    res.setHeader("content-type", "text/html; charset=utf-8");
-    if (req.url === "/") {
-      res.end('<a href="/a/"></a><a href="/a"></a>');
-      return;
-    }
-    res.end("<html></html>");
-  });
-
-  try {
-    const { port } = server.address();
-    await crawl({
-      startUrl: `http://127.0.0.1:${port}/`,
-      maxDepth: 1,
-      maxPages: 10,
-      concurrency: 1,
-      minIntervalMs: 0,
-    });
-    const spellings = requested.filter((url) => url === "/a/" || url === "/a");
-    expect(spellings).toEqual(["/a/"]);
-  } finally {
-    await close(server);
-  }
 });
 
-test.failing("the reserved query spelling keeps percent-encoding", async () => {
-  const requested = [];
-  const server = await listen((req, res) => {
-    requested.push(req.url);
-    res.setHeader("content-type", "text/html; charset=utf-8");
-    if (req.url === "/") {
-      res.end('<a href="/search?q=b%20a"></a>');
-      return;
+test("the reserved query spelling keeps percent-encoding", async () => {
+  await withServer(
+    {
+      "/": html('<a href="/search?q=b%20a"></a>'),
+      "/search": html("<html></html>"),
+    },
+    async (server) => {
+      await crawl({
+        startUrl: `${server.origin}/`,
+        maxDepth: 1,
+        maxPages: 10,
+        concurrency: 1,
+        minIntervalMs: 0,
+      });
+      const requested = server.requests.map((request) => request.path);
+      expect(requested).toContain("/search?q=b%20a");
+      expect(requested).not.toContain("/search?q=b+a");
     }
-    res.end("<html></html>");
-  });
-
-  try {
-    const { port } = server.address();
-    await crawl({
-      startUrl: `http://127.0.0.1:${port}/`,
-      maxDepth: 1,
-      maxPages: 10,
-      concurrency: 1,
-      minIntervalMs: 0,
-    });
-    expect(requested).toContain("/search?q=b%20a");
-    expect(requested).not.toContain("/search?q=b+a");
-  } finally {
-    await close(server);
-  }
+  );
 });
 
-test.failing("a discovered link with userinfo is not requested and has no record", async () => {
-  const requested = [];
+test("a discovered link with userinfo is not requested and has no record", async () => {
+  const authorizations = [];
   let secret = "";
-  const server = await listen((req, res) => {
-    requested.push({ url: req.url, authorization: req.headers.authorization });
-    res.setHeader("content-type", "text/html; charset=utf-8");
-    if (req.url === "/") {
-      res.end(`<a href="${secret}"></a>`);
-      return;
-    }
-    res.end("<html></html>");
+  const server = createFixtureServer({
+    routes: {
+      "/": (req, res) => {
+        authorizations.push(req.headers.authorization);
+        res.setHeader("content-type", "text/html; charset=utf-8");
+        res.end(`<a href="${secret}"></a>`);
+      },
+      "/secret": (req, res) => {
+        authorizations.push(req.headers.authorization);
+        res.setHeader("content-type", "text/html; charset=utf-8");
+        res.end("<html></html>");
+      },
+    },
   });
-
-  const { port } = server.address();
-  secret = `http://user:pw@127.0.0.1:${port}/secret`;
+  await server.listen();
+  secret = `http://user:pw@${new URL(server.origin).host}/secret`;
 
   try {
     const result = await crawl({
-      startUrl: `http://127.0.0.1:${port}/`,
+      startUrl: `${server.origin}/`,
       maxDepth: 1,
       maxPages: 10,
       concurrency: 1,
       minIntervalMs: 0,
     });
-    expect(result.pages.map((page) => page.canonicalUrl)).toEqual([`http://127.0.0.1:${port}/`]);
-    expect(requested.map((entry) => entry.url)).not.toContain("/secret");
-    expect(requested.some((entry) => entry.authorization)).toBe(false);
+    expect(result.pages.map((page) => page.canonicalUrl)).toEqual([`${server.origin}/`]);
+    expect(server.requests.map((request) => request.path)).not.toContain("/secret");
+    expect(authorizations.some(Boolean)).toBe(false);
     expect(result.pages.some((page) => page.requestedUrl === secret)).toBe(false);
   } finally {
-    await close(server);
+    await server.close();
   }
 });
 
-test.failing("the first reserved spelling wins when /a comes first", async () => {
-  const requested = [];
-  const server = await listen((req, res) => {
-    requested.push(req.url);
-    res.setHeader("content-type", "text/html; charset=utf-8");
-    if (req.url === "/") {
-      res.end('<a href="/a"></a><a href="/a/"></a>');
-      return;
+test("the first reserved spelling wins when /a comes first", async () => {
+  await withServer(
+    {
+      "/": html('<a href="/a"></a><a href="/a/"></a>'),
+      "/a": html("<html></html>"),
+      "/a/": html("<html></html>"),
+    },
+    async (server) => {
+      await crawl({
+        startUrl: `${server.origin}/`,
+        maxDepth: 1,
+        maxPages: 10,
+        concurrency: 1,
+        minIntervalMs: 0,
+      });
+      const spellings = server.requests
+        .map((request) => request.path)
+        .filter((path) => path === "/a/" || path === "/a");
+      expect(spellings).toEqual(["/a"]);
     }
-    res.end("<html></html>");
-  });
-
-  try {
-    const { port } = server.address();
-    await crawl({
-      startUrl: `http://127.0.0.1:${port}/`,
-      maxDepth: 1,
-      maxPages: 10,
-      concurrency: 1,
-      minIntervalMs: 0,
-    });
-    const spellings = requested.filter((url) => url === "/a/" || url === "/a");
-    expect(spellings).toEqual(["/a"]);
-  } finally {
-    await close(server);
-  }
+  );
 });
