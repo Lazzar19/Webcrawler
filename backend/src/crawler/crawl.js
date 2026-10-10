@@ -3,7 +3,7 @@ const { createLogger } = require("./logger");
 const { createCrawlConfig } = require("./crawl-config");
 const { createHttpClient, FetchError } = require("./http-client");
 const { createPolitenessGate } = require("./politeness");
-const { createRobotsCheck } = require("./robots-check");
+const { createRobotsManager } = require("./robots-manager");
 const { createFrontier } = require("./frontier");
 const { canonicalKey, extractLinks } = require("./url-policy");
 
@@ -127,7 +127,7 @@ async function fetchRecord(item, lease, http, robots, frontier, clock, startOrig
       frontier.alias(hopKey, item);
       chain.push(hopKey);
 
-      const decision = await robots.check(resolved.href);
+      const decision = await robots.check(resolved.href, { beforeAttempt: lease.beforeAttempt });
       if (!decision.allowed) {
         skipPage(page, decision.reason);
         item.links = [];
@@ -168,7 +168,9 @@ async function runWorker(frontier, gate, robots, http, clock, logger, startOrigi
     let lease;
     try {
       lease = await gate.acquire(new URL(item.page.requestedUrl).origin);
-      const decision = await robots.check(item.page.requestedUrl);
+      const decision = await robots.check(item.page.requestedUrl, {
+        beforeAttempt: lease.beforeAttempt,
+      });
       if (!decision.allowed) {
         item.page.state = "skipped";
         item.page.skipReason = decision.reason;
@@ -216,7 +218,11 @@ async function crawl(configInput, dependencies = {}) {
     fatalSignal: fatalControl.signal,
   });
   const gate = createPolitenessGate();
-  const robots = createRobotsCheck();
+  const robots = createRobotsManager({
+    http,
+    userAgent: config.userAgent,
+    respectRobots: config.respectRobots,
+  });
   const frontier = createFrontier({
     config,
     clock,
@@ -265,14 +271,7 @@ async function crawl(configInput, dependencies = {}) {
     stopReason: frontier.stopping ? "interrupted" : "completed",
     config,
     pages: frontier.pages,
-    robots: [
-      {
-        origin: new URL(config.startUrl).origin,
-        statusCode: null,
-        outcome: "not-checked",
-        errorKind: null,
-      },
-    ],
+    robots: robots.summaries(),
     counts: countsFor(frontier.pages, frontier.fetchReservations),
   };
 }

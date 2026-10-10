@@ -85,7 +85,7 @@ test("a non-html response is skipped and contributes no links", async () => {
       attempts: 1,
     }),
   ]);
-  expect(http.requested).toEqual(["https://example.com/file"]);
+  expect(http.requested).toEqual(["https://example.com/robots.txt", "https://example.com/file"]);
 });
 
 test("html with a charset parameter is fetched", async () => {
@@ -112,7 +112,7 @@ test("an external link is an other-origin record and is not fetched", async () =
     ["https://example.com/", "ok", null],
     ["https://external.com/page", "skipped", "other-origin"],
   ]);
-  expect(http.requested).toEqual(["https://example.com/"]);
+  expect(http.requested).toEqual(["https://example.com/robots.txt", "https://example.com/"]);
 });
 
 test("maxDepth is inclusive and the next link is depth-limit", async () => {
@@ -130,7 +130,7 @@ test("maxDepth is inclusive and the next link is depth-limit", async () => {
     ["https://example.com/page2", "ok", null],
     ["https://example.com/page3", "skipped", "depth-limit"],
   ]);
-  expect(http.requested).toEqual(["https://example.com/", "https://example.com/page2"]);
+  expect(http.requested).toEqual(["https://example.com/robots.txt", "https://example.com/", "https://example.com/page2"]);
 });
 
 test("maxDepth 0 fetches only the start URL", async () => {
@@ -142,7 +142,7 @@ test("maxDepth 0 fetches only the start URL", async () => {
   );
   const pages = (await result).pages;
   expect(pages.map((page) => page.skipReason)).toEqual([null, "depth-limit"]);
-  expect(http.requested).toEqual(["https://example.com/"]);
+  expect(http.requested).toEqual(["https://example.com/robots.txt", "https://example.com/"]);
 });
 
 test("maxPages counts fetch reservations", async () => {
@@ -160,7 +160,7 @@ test("maxPages counts fetch reservations", async () => {
     ["https://example.com/a", "ok", null],
     ["https://example.com/b", "skipped", "page-limit"],
   ]);
-  expect(http.requested).toEqual(["https://example.com/", "https://example.com/a"]);
+  expect(http.requested).toEqual(["https://example.com/robots.txt", "https://example.com/", "https://example.com/a"]);
   expect((await result).counts.reserved).toBe(2);
 });
 
@@ -200,6 +200,18 @@ test("commit order follows dequeue order when a later page responds first", asyn
     async get(url, options) {
       await options.beforeAttempt();
       const path = new URL(url).pathname;
+      if (path === "/robots.txt") {
+        return {
+          url,
+          statusCode: 200,
+          contentType: "text/plain",
+          location: null,
+          body: "",
+          byteLength: 0,
+          attempts: 1,
+          durationMs: 0,
+        };
+      }
       const route = routes[path];
       const page = typeof route === "function" ? await route() : route;
       const read = options.wantBody({
@@ -300,7 +312,7 @@ test("a redirect alias does not consume a page slot and is requested", async () 
     { maxPages: 1, maxDepth: 2 }
   );
   const crawlResult = await result;
-  expect(http.requested).toEqual(["https://example.com/", "https://example.com/target"]);
+  expect(http.requested).toEqual(["https://example.com/robots.txt", "https://example.com/", "https://example.com/target"]);
   expect(crawlResult.counts.reserved).toBe(1);
   expect(crawlResult.pages.map((page) => [page.canonicalUrl, page.state, page.skipReason, page.finalUrl])).toEqual([
     ["https://example.com/", "ok", null, "https://example.com/target"],
@@ -322,7 +334,7 @@ test("a redirect onto an existing key is duplicate and is not requested", async 
     { maxDepth: 2, concurrency: 1 }
   );
   const pages = (await result).pages;
-  expect(http.requested).toEqual(["https://example.com/", "https://example.com/a"]);
+  expect(http.requested).toEqual(["https://example.com/robots.txt", "https://example.com/", "https://example.com/a"]);
   expect(pages.find((page) => page.canonicalUrl === "https://example.com/a").skipReason).toBe(
     "duplicate"
   );
@@ -341,7 +353,7 @@ test("an off-origin redirect is not requested", async () => {
     { maxDepth: 2 }
   );
   const pages = (await result).pages;
-  expect(http.requested).toEqual(["https://example.com/"]);
+  expect(http.requested).toEqual(["https://example.com/robots.txt", "https://example.com/"]);
   expect(pages[0].skipReason).toBe("redirect-off-origin");
 });
 
@@ -364,7 +376,7 @@ test("a redirect loop fails without another request", async () => {
     { maxDepth: 2 }
   );
   const pages = (await result).pages;
-  expect(http.requested).toEqual(["https://example.com/", "https://example.com/again"]);
+  expect(http.requested).toEqual(["https://example.com/robots.txt", "https://example.com/", "https://example.com/again"]);
   expect(pages[0].errorKind).toBe("redirect-loop");
 });
 
@@ -382,7 +394,13 @@ test("an interrupt does not cut a retry sleep short", async () => {
       retryBaseDelayMs: 500,
     },
     {
-      fetchImpl() {
+      fetchImpl(url) {
+        if (new URL(url).pathname === "/robots.txt") {
+          return new Response("User-agent: *\nAllow: /\n", {
+            status: 200,
+            headers: { "content-type": "text/plain" },
+          });
+        }
         calls += 1;
         if (calls === 1) {
           const error = new TypeError("fetch failed");

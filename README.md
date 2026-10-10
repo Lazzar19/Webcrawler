@@ -20,9 +20,7 @@ This is a hands-on project for learning HTTP, scheduling, and the limits of a si
 
 ## Still open
 
-These are known gaps, not future ideas. Milestone 1 is complete. The HTTP client times out, stops an oversized body, and retries the cemented cases. Milestone 2 still owns robots and politeness. Milestone 3 owns the reporter, including `sortPages` and the Desktop path.
-
-- Robots is an allow-all stand-in. `robots-parser` is unused.
+These are known gaps, not future ideas. Milestone 1 is complete. The HTTP client times out, stops an oversized body, and retries the cemented cases. `robots-parser` decides which paths are allowed. Milestone 2 still owns the politeness gate, so crawl-delay is not applied yet. Milestone 3 owns the reporter, including `sortPages` and the Desktop path.
 - `printReport` still writes a CSV onto a guessed Desktop path. `npm start` does not call it.
 - `sortPages` still sorts by hit count.
 

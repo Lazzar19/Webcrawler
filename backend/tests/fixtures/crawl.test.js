@@ -94,8 +94,11 @@ describe("fixture crawl", () => {
       },
       async (server) => {
         const result = await crawlOrigin(server, { maxDepth: 0, maxPages: 10, concurrency: 1 });
-        expect(paths(server)).toEqual(["/"]);
-        expect(server.requests.map((request) => request.userAgent)).toEqual([DEFAULTS.userAgent]);
+        expect(paths(server)).toEqual(["/robots.txt", "/"]);
+        expect(server.requests.map((request) => request.userAgent)).toEqual([
+          DEFAULTS.userAgent,
+          DEFAULTS.userAgent,
+        ]);
         expect(outline(result.pages)).toEqual([
           {
             canonicalUrl: `${server.origin}/`,
@@ -127,7 +130,7 @@ describe("fixture crawl", () => {
       },
       async (server) => {
         const result = await crawlOrigin(server, { maxDepth: 1, maxPages: 10, concurrency: 1 });
-        expect(paths(server)).toEqual(["/", "/a"]);
+        expect(paths(server)).toEqual(["/robots.txt", "/", "/a"]);
         expect(outline(result.pages)).toEqual([
           {
             canonicalUrl: `${server.origin}/`,
@@ -167,7 +170,7 @@ describe("fixture crawl", () => {
       },
       async (server) => {
         const result = await crawlOrigin(server, { maxDepth: 2, maxPages: 10, concurrency: 1 });
-        expect(paths(server)).toEqual(["/", "/a", "/b"]);
+        expect(paths(server)).toEqual(["/robots.txt", "/", "/a", "/b"]);
         expect(result.pages.map((page) => page.state)).toEqual(["ok", "ok", "ok"]);
         expect(result.pages.map((page) => page.depth)).toEqual([0, 1, 2]);
       }
@@ -183,7 +186,7 @@ describe("fixture crawl", () => {
       },
       async (server) => {
         const result = await crawlOrigin(server, { maxDepth: 2, maxPages: 2, concurrency: 1 });
-        expect(paths(server)).toEqual(["/", "/a"]);
+        expect(paths(server)).toEqual(["/robots.txt", "/", "/a"]);
         expect(result.counts.reserved).toBe(2);
         expect(outline(result.pages)).toEqual([
           {
@@ -223,7 +226,7 @@ describe("fixture crawl", () => {
       },
       async (server) => {
         const result = await crawlOrigin(server, { maxDepth: 2, maxPages: 10, concurrency: 1 });
-        expect(paths(server)).toEqual(["/", "/a"]);
+        expect(paths(server)).toEqual(["/robots.txt", "/", "/a"]);
         expect(outline(result.pages)).toEqual([
           {
             canonicalUrl: `${server.origin}/`,
@@ -334,7 +337,7 @@ describe("fixture crawl", () => {
       },
       async (server) => {
         const result = await crawlOrigin(server, { maxDepth: 2, maxPages: 1, concurrency: 1 });
-        expect(paths(server)).toEqual(["/", "/target"]);
+        expect(paths(server)).toEqual(["/robots.txt", "/", "/target"]);
         expect(result.counts.reserved).toBe(1);
         expect(result.pages[0].state).toBe("ok");
         expect(result.pages[0].finalUrl).toBe(`${server.origin}/target`);
@@ -351,7 +354,7 @@ describe("fixture crawl", () => {
       },
       async (server) => {
         const result = await crawlOrigin(server, { maxDepth: 2, maxPages: 10, concurrency: 1 });
-        expect(paths(server)).toEqual(["/", "/a"]);
+        expect(paths(server)).toEqual(["/robots.txt", "/", "/a"]);
         expect(result.pages.find((page) => page.canonicalUrl === `${server.origin}/a`).skipReason).toBe(
           "duplicate"
         );
@@ -373,7 +376,7 @@ describe("fixture crawl", () => {
         },
         async (server) => {
           const result = await crawlOrigin(server, { maxDepth: 2, maxPages: 10, concurrency: 1 });
-          expect(paths(server)).toEqual(["/"]);
+          expect(paths(server)).toEqual(["/robots.txt", "/"]);
           expect(other.requests).toEqual([]);
           expect(result.pages[0].skipReason).toBe("redirect-off-origin");
         }
@@ -391,7 +394,7 @@ describe("fixture crawl", () => {
       },
       async (server) => {
         const result = await crawlOrigin(server, { maxDepth: 2, maxPages: 10, concurrency: 1 });
-        expect(paths(server)).toEqual(["/", "/again"]);
+        expect(paths(server)).toEqual(["/robots.txt", "/", "/again"]);
         expect(result.pages[0].state).toBe("failed");
         expect(result.pages[0].errorKind).toBe("redirect-loop");
       }
@@ -409,7 +412,7 @@ describe("fixture crawl", () => {
       },
       async (server) => {
         const result = await crawlOrigin(server, { maxDepth: 2, maxPages: 10, concurrency: 1 });
-        expect(paths(server)).toEqual(["/"]);
+        expect(paths(server)).toEqual(["/robots.txt", "/"]);
         expect(result.pages[0].state).toBe("failed");
         expect(result.pages[0].errorKind).toBe("bad-redirect");
       }
@@ -423,7 +426,7 @@ describe("fixture crawl", () => {
       },
       async (server) => {
         const result = await crawlOrigin(server, { maxDepth: 2, maxPages: 10, concurrency: 1 });
-        expect(paths(server)).toEqual(["/"]);
+        expect(paths(server)).toEqual(["/robots.txt", "/"]);
         expect(result.pages[0].state).toBe("failed");
         expect(result.pages[0].errorKind).toBe("bad-redirect");
       }
@@ -443,7 +446,7 @@ describe("fixture crawl", () => {
       async (server) => {
         location = `http://user:pw@${new URL(server.origin).host}/secret`;
         const result = await crawlOrigin(server, { maxDepth: 2, maxPages: 10, concurrency: 1 });
-        expect(paths(server)).toEqual(["/"]);
+        expect(paths(server)).toEqual(["/robots.txt", "/"]);
         expect(result.pages[0].state).toBe("failed");
         expect(result.pages[0].errorKind).toBe("bad-redirect");
       }
@@ -457,7 +460,7 @@ describe("fixture crawl", () => {
       },
       async (server) => {
         const result = await crawlOrigin(server, { maxDepth: 2, maxPages: 10, concurrency: 1 });
-        expect(paths(server)).toEqual(["/"]);
+        expect(paths(server)).toEqual(["/robots.txt", "/"]);
         expect(result.pages[0].state).toBe("skipped");
         expect(result.pages[0].skipReason).toBe("redirect-off-origin");
       }
@@ -472,7 +475,7 @@ describe("fixture crawl", () => {
     }
     await withServer(routes, async (server) => {
       const result = await crawlOrigin(server, { maxDepth: 2, maxPages: 10, concurrency: 1 });
-      expect(paths(server)).toEqual(["/", "/1", "/2", "/3", "/4", "/5"]);
+      expect(paths(server)).toEqual(["/robots.txt", "/", "/1", "/2", "/3", "/4", "/5"]);
       expect(result.pages[0].state).toBe("failed");
       expect(result.pages[0].errorKind).toBe("redirect-limit");
     });
@@ -552,7 +555,7 @@ describe("fixture crawl", () => {
       expect(result.counts.ok).toBe(111);
       expect(result.counts.skipped).toBe(1000);
       expect(result.pages.filter((page) => page.skipReason === "depth-limit")).toHaveLength(1000);
-      expect(server.requests).toHaveLength(111);
+      expect(server.requests).toHaveLength(112);
     });
   }, 20000);
 });
@@ -585,6 +588,9 @@ test("an unclassified error rejects with that object after every worker returns"
     async get(url, options) {
       await options.beforeAttempt();
       const path = new URL(url).pathname;
+      if (path === "/robots.txt") {
+        return ok(url, "", options);
+      }
       if (path === "/") {
         return ok(url, '<a href="/boom"></a><a href="/slow"></a>', options);
       }
