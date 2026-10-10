@@ -32,7 +32,7 @@ function blankPage(fields) {
   };
 }
 
-function createFrontier({ config, clock }) {
+function createFrontier({ config, clock, onFatal }) {
   const startOrigin = new URL(requestedSpelling(config.startUrl)).origin;
   const pages = [];
   const queue = [];
@@ -199,6 +199,9 @@ function createFrontier({ config, clock }) {
       }
       fatalError = error;
       stopping = true;
+      if (onFatal) {
+        onFatal();
+      }
       pump();
     },
     stop() {

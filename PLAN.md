@@ -412,12 +412,12 @@ Integration tests use a real server, not a `fetch` mock.
 
 ## Current Status
 
-**Active milestone:** Milestone 2 - HTTP policy and robots. The checkpoint is approved. Implementation has not started.
+**Active milestone:** Milestone 2 - HTTP policy and robots. The checkpoint is approved. Timeout, the byte limit, network kinds, and retries are in place. Robots and politeness are still stand-ins.
 
 **Known behavior of the code today:**
 
 - `[x]` A frontier crawl, config validation, a custom robots parser, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 166 tests.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 182 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
 - `[x]` `npm start` from `backend/` runs `src/main.js`.
@@ -429,6 +429,7 @@ Integration tests use a real server, not a `fetch` mock.
 - `[x]` Scope is the start origin. Redirects are hop-by-hop. An off-origin hop is not requested.
 - `[x]` The engine returns `CrawlResult` and `PageResult`. Non-HTML is `skipped` / `non-html`. A missing `Content-Type` is non-HTML. Unread bodies are cancelled.
 - `[x]` Each page attempt has a timeout and a streaming byte limit. A hung response is `failed` / `timeout`. An oversized body is `failed` / `too-large`. Redirects are still manual. An invalid start URL is a `ConfigError` before any fetch.
+- `[x]` Retries stay inside the HTTP client. `timeout`, `connect`, `reset`, and `429`/`500`/`502`/`503`/`504` retry. `dns`, `tls`, `too-large`, redirects, and every other status do not. Backoff runs through the clock before `beforeAttempt`. `Retry-After` on `429` or `503` can only raise that wait, and a wait above 5000 ms returns the response. Fatal-stop ends the sleep and does not abort `fetch`.
 - `[!]` The worker calls an allow-all robots stand-in. `robots-parser` is installed and unused. The custom parser does not decide whether a path is allowed.
 - `[!]` `printReport` still writes a CSV onto a guessed Desktop path, including a Windows path when run from WSL. The macOS branch is unreachable. `npm start` no longer calls it. `sortPages` still sorts by hit count.
 - `[x]` Node is pinned to 24, and ESLint checks `backend/`.
@@ -504,7 +505,7 @@ Checkpoint approved 2026-10-10. The decision table and politeness cases in the l
 
 - `[x]` Add the per-attempt timeout and the streaming byte limit to the HTTP client. Count decoded bytes as they arrive. Do not load the whole body and measure it afterwards.
 - `[x]` Map network errors to the error taxonomy through `cause.code`. Unit-test each kind with an injected `fetchImpl`.
-- `[ ]` Retry only the cemented cases, with backoff before `beforeAttempt`, the `Retry-After` rule, and the injected clock. Race retry sleeps against the fatal-stop abort. Do not abort the `fetch`.
+- `[x]` Retry only the cemented cases, with backoff before `beforeAttempt`, the `Retry-After` rule, and the injected clock. Race retry sleeps against the fatal-stop abort. Do not abort the `fetch`.
 - `[ ]` Replace the robots stand-in with a manager on `robots-parser`. Single-flight cache, status table, fail-closed, product-token match, manager-owned robots redirect loop, lease reuse. `check(url, { beforeAttempt })` stays at worker step 4 and on every page redirect hop.
 - `[ ]` Implement the politeness gate: per-origin FIFO leases, `nextAllowedAt` set before waiting, gap on every attempt, crawl-delay from the robots manager after a successful parse, `waitedMs` as specified.
 - `[ ]` Unit-test the gate and the retry delays with a fake clock, including the case where backoff already passed the gap.
@@ -893,7 +894,18 @@ These replace the looser readings from the first draft of this checkpoint.
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 166 tests. Each code above is one case.
 - **Lesson learned:** The kind is decided before the crawler sees the error. If the client wraps it as a generic failure, the crawl stops instead of recording the page.
 
+### 2026-10-10 - Retries
+
+- **Problem:** One failed attempt was final, so a timeout or a `503` ended the page even when `retryCount` said to try again.
+- **Chosen solution:** The HTTP client retries `timeout`, `connect`, `reset`, and status `429`, `500`, `502`, `503`, `504`. It does not retry `dns`, `tls`, `too-large`, redirects, or any other status. The delay before retry `n` is `min(5000, retryBaseDelayMs * 2^(n-1))`. The client sleeps that delay on the injected clock, then calls `beforeAttempt`, then starts the attempt. On `429` or `503`, `Retry-After` can raise the wait. Above 5000 ms the response is returned. `frontier.fail` aborts `fatalSignal`, which ends the sleep and leaves `fetch` running. SIGINT still only stops the frontier.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 182 tests. A fake clock locks the delays, the `Retry-After` cases, and the order backoff then `beforeAttempt` then fetch. Aborting `fatalSignal` during the sleep still completes the next attempt, and that attempt's signal stays open.
+- **Lesson learned:** The sleep and the fetch are different signals. Cancelling the sleep has to resolve, not throw, or a retry becomes a fatal stop.
+
 ## Change Log
+
+### 2026-10-10 (Retries)
+
+- Retries live in the HTTP client. Backoff goes through the clock before `beforeAttempt`. `Retry-After` can only raise the wait. Fatal-stop ends that sleep and does not abort `fetch`.
 
 ### 2026-10-10 (Network error kinds)
 

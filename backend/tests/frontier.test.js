@@ -367,3 +367,59 @@ test("a redirect loop fails without another request", async () => {
   expect(http.requested).toEqual(["https://example.com/", "https://example.com/again"]);
   expect(pages[0].errorKind).toBe("redirect-loop");
 });
+
+test("an interrupt does not cut a retry sleep short", async () => {
+  const signal = new AbortController();
+  let calls = 0;
+  let releaseSleep;
+  const pending = crawl(
+    {
+      startUrl: "http://example.com/",
+      concurrency: 1,
+      maxPages: 1,
+      maxDepth: 0,
+      retryCount: 1,
+      retryBaseDelayMs: 500,
+    },
+    {
+      fetchImpl() {
+        calls += 1;
+        if (calls === 1) {
+          const error = new TypeError("fetch failed");
+          error.cause = { code: "ECONNRESET" };
+          throw error;
+        }
+        return new Response("<html></html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
+      },
+      clock: {
+        now: () => 1_700_000_000_000,
+        sleep() {
+          return new Promise((resolve) => {
+            releaseSleep = resolve;
+          });
+        },
+      },
+      signal: signal.signal,
+      logger: { debug() {}, info() {}, warn() {}, error() {} },
+    },
+  );
+
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+  expect(typeof releaseSleep).toBe("function");
+  signal.abort();
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+  expect(calls).toBe(1);
+  releaseSleep();
+  const result = await pending;
+  expect(calls).toBe(2);
+  expect(result.stopReason).toBe("interrupted");
+  expect(result.pages[0].state).toBe("ok");
+  expect(result.pages[0].attempts).toBe(2);
+});

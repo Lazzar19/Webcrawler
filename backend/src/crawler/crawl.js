@@ -205,15 +205,25 @@ async function crawl(configInput, dependencies = {}) {
   const config = createCrawlConfig(configInput);
   const clock = dependencies.clock ?? createClock();
   const logger = dependencies.logger ?? createLogger();
+  const fatalControl = new AbortController();
   const http = dependencies.httpClient ?? createHttpClient({
     fetchImpl: dependencies.fetchImpl,
     clock,
     userAgent: config.userAgent,
     timeoutMs: config.timeoutMs,
+    retryCount: config.retryCount,
+    retryBaseDelayMs: config.retryBaseDelayMs,
+    fatalSignal: fatalControl.signal,
   });
   const gate = createPolitenessGate();
   const robots = createRobotsCheck();
-  const frontier = createFrontier({ config, clock });
+  const frontier = createFrontier({
+    config,
+    clock,
+    onFatal() {
+      fatalControl.abort();
+    },
+  });
   const startedAt = clock.now();
   const signal = dependencies.signal;
 
