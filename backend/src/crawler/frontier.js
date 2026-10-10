@@ -77,12 +77,7 @@ function createFrontier({ config, clock }) {
   function linksInCommitOrder(hrefs) {
     const spelling = new Map();
     for (const href of hrefs) {
-      let key;
-      try {
-        key = canonicalKey(href);
-      } catch {
-        continue;
-      }
+      const key = canonicalKey(href);
       if (!spelling.has(key)) {
         spelling.set(key, href);
       }
@@ -154,10 +149,13 @@ function createFrontier({ config, clock }) {
       const item = buffer.get(nextCommit);
       buffer.delete(nextCommit);
       inFlight -= 1;
-      if (!stopping) {
-        reserveLinks(item, item.links);
+      try {
+        if (!stopping) {
+          reserveLinks(item, item.links);
+        }
+      } finally {
+        nextCommit += 1;
       }
-      nextCommit += 1;
     }
     pump();
   }

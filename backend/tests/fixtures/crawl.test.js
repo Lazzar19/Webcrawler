@@ -1,4 +1,5 @@
 const { crawl } = require("../../src/crawler/crawl");
+const { DEFAULTS } = require("../../src/crawler/crawl-config");
 const { createFixtureServer } = require("./server");
 
 const clock = { now: () => 1_700_000_000_000 };
@@ -94,6 +95,7 @@ describe("fixture crawl", () => {
       async (server) => {
         const result = await crawlOrigin(server, { maxDepth: 0, maxPages: 10, concurrency: 1 });
         expect(paths(server)).toEqual(["/"]);
+        expect(server.requests.map((request) => request.userAgent)).toEqual([DEFAULTS.userAgent]);
         expect(outline(result.pages)).toEqual([
           {
             canonicalUrl: `${server.origin}/`,
@@ -394,6 +396,86 @@ describe("fixture crawl", () => {
         expect(result.pages[0].errorKind).toBe("redirect-loop");
       }
     );
+  });
+
+  test("a redirect with no Location is bad-redirect and stops", async () => {
+    await withServer(
+      {
+        "/": (_req, res) => {
+          res.writeHead(302);
+          res.end();
+        },
+        "/next": html("no"),
+      },
+      async (server) => {
+        const result = await crawlOrigin(server, { maxDepth: 2, maxPages: 10, concurrency: 1 });
+        expect(paths(server)).toEqual(["/"]);
+        expect(result.pages[0].state).toBe("failed");
+        expect(result.pages[0].errorKind).toBe("bad-redirect");
+      }
+    );
+  });
+
+  test("a redirect Location that does not parse is bad-redirect and is not requested", async () => {
+    await withServer(
+      {
+        "/": redirect(302, "http://["),
+      },
+      async (server) => {
+        const result = await crawlOrigin(server, { maxDepth: 2, maxPages: 10, concurrency: 1 });
+        expect(paths(server)).toEqual(["/"]);
+        expect(result.pages[0].state).toBe("failed");
+        expect(result.pages[0].errorKind).toBe("bad-redirect");
+      }
+    );
+  });
+
+  test("a redirect Location with userinfo is bad-redirect and is not requested", async () => {
+    let location = "";
+    await withServer(
+      {
+        "/": (_req, res) => {
+          res.writeHead(302, { location });
+          res.end();
+        },
+        "/secret": html("no"),
+      },
+      async (server) => {
+        location = `http://user:pw@${new URL(server.origin).host}/secret`;
+        const result = await crawlOrigin(server, { maxDepth: 2, maxPages: 10, concurrency: 1 });
+        expect(paths(server)).toEqual(["/"]);
+        expect(result.pages[0].state).toBe("failed");
+        expect(result.pages[0].errorKind).toBe("bad-redirect");
+      }
+    );
+  });
+
+  test("a redirect Location to ftp is redirect-off-origin and is not requested", async () => {
+    await withServer(
+      {
+        "/": redirect(302, "ftp://files.example/a"),
+      },
+      async (server) => {
+        const result = await crawlOrigin(server, { maxDepth: 2, maxPages: 10, concurrency: 1 });
+        expect(paths(server)).toEqual(["/"]);
+        expect(result.pages[0].state).toBe("skipped");
+        expect(result.pages[0].skipReason).toBe("redirect-off-origin");
+      }
+    );
+  });
+
+  test("a sixth redirect hop is redirect-limit and is not requested", async () => {
+    const routes = { "/6": html("no") };
+    for (let hop = 0; hop <= 5; hop += 1) {
+      const path = hop === 0 ? "/" : `/${hop}`;
+      routes[path] = redirect(302, `/${hop + 1}`);
+    }
+    await withServer(routes, async (server) => {
+      const result = await crawlOrigin(server, { maxDepth: 2, maxPages: 10, concurrency: 1 });
+      expect(paths(server)).toEqual(["/", "/1", "/2", "/3", "/4", "/5"]);
+      expect(result.pages[0].state).toBe("failed");
+      expect(result.pages[0].errorKind).toBe("redirect-limit");
+    });
   });
 
   test("a ten-link fan-out at depth 2 finishes with five workers", async () => {

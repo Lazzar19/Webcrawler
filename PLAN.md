@@ -399,12 +399,12 @@ Integration tests use a real server, not a `fetch` mock.
 
 ## Current Status
 
-**Active milestone:** Milestone 1 - Queue, workers, and URL policy
+**Active milestone:** Milestone 2 - HTTP policy and robots. The checkpoint comes first: the robots decision table and the politeness cases in the learning log, before any implementation.
 
 **Known behavior of the code today:**
 
 - `[x]` A frontier crawl, config validation, a custom robots parser, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 141 tests.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 147 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
 - `[x]` `npm start` from `backend/` runs `src/main.js`.
@@ -451,7 +451,7 @@ URL policy:
 
 - `[x]` Implement the canonical key from Cemented Behavior. In the same change, replace the local stand-in in [backend/tests/url-identity.test.js](backend/tests/url-identity.test.js) with the real module and turn every `test.failing` in that file into `test`. Convert all of them at once. Do not convert only the ones that went red: a `test.failing` that stays green means that case is still wrong.
 - `[x]` Replace string concatenation with `getAttribute('href')` and `new URL(raw, documentBase)`. Cover `./`, `../`, bare relative paths, query-only links, protocol-relative links, `<base href>`, non-`http(s)` schemes, and a base URL that already has a path.
-- `[ ]` Rewrite the `sortPages` tests. Keys without a scheme, `about:blank` resolution, `maxPages: Infinity`, and the hit-count map are rewritten.
+- `[x]` Leave `sortPages` with the old reporter. Rewriting those tests moved to Milestone 3, next to removing the Desktop path. Keys without a scheme, `about:blank` resolution, `maxPages: Infinity`, and the hit-count map are rewritten.
 
 Frontier and workers:
 
@@ -509,6 +509,7 @@ Checkpoint first: the agent writes the robots decision table and the politeness 
 - `[ ]` Use exit codes `0`, `1`, `2`, and `130` as specified above.
 - `[ ]` Emit console, JSON, and CSV from `CrawlResult`, following the one-artifact-on-stdout rule. CSV escapes commas, quotes, and newlines.
 - `[ ]` Write files only to `--output`. Remove the Desktop path.
+- `[ ]` Rewrite `sortPages` and [backend/tests/report.test.js](backend/tests/report.test.js). Reporters keep `pages` in creation order. Remove the hit-count sort together with the Desktop path.
 - `[ ]` On SIGINT, stop handing out items, finish in-flight work, and emit the partial result.
 - `[ ]` Test the CLI as a child process against the fixture: bad arguments, explicit `0`, JSON shape, JSON on stdout being parseable, CSV escaping, and a crawl that includes a failed page.
 
@@ -676,17 +677,17 @@ Included in the Milestone 1 checkpoint approved on 2026-10-08.
 - **Resolved before approval:** `url-identity.test.js` has the query percent-escape case and the `?&` case. `fetch-spelling.test.js` asserts that the userinfo crawl has only the start record, and it has the reversed-order spelling test.
 - **Lesson learned:** A rule that is correct for one URL component, such as "do not decode", is wrong when written as a rule for the whole URL.
 
-#### Retired behavior still locked by old tests
+#### Retired behavior
 
-The URL policy step rewrote the scheme-less key tests and the `about:blank` resolution test. The rest still lock the old crawl. They change when the frontier and the result contract replace that behavior.
+The old crawl locks below were rewritten with the frontier and the result contract. One reporter lock remains, and it belongs to Milestone 3.
 
 - Keys without a scheme. Rewritten. Lookups are full keys such as `https://example.com/pageA`, and `http` and `https` stay different.
 - `about:blank` resolution. Rewritten. `href="invalid"` on base `https://blog.boot.dev` resolves to `https://blog.boot.dev/invalid`. Resolved spellings still keep a trailing slash. Only the key drops it.
-- `maxPages: Infinity`. [backend/tests/crawl-config.test.js](backend/tests/crawl-config.test.js) accepts `Infinity` and expects it as the default when only `maxDepth` is overridden. The replacement rejects `Infinity`. The default is `50`.
-- The hit-count map. The cycle test expects `https://example.com/pageA` to be at least `1` and `https://example.com/pageB` to be `1`. Non-HTML responses expect `{'https://example.com/file': 1}`. The replacement stores a `PageResult` per key. A non-HTML response is `skipped` / `non-html`. Repeat discoveries do not increment a count.
-- Exclusive depth. The `depth limiting` test runs with `maxDepth: 1` and expects `https://example.com/page2` to be absent. `maxDepth` is now inclusive. `/page2` is at depth 1, so it is reserved and fetched. Its own link to `/page2` is already in `seen` and is ignored. The test locks the old off-by-one behavior. It does not describe a `depth-limit` record.
-- Dropped external links. The `ignore external links` test expects `Object.keys(pages).length` to be `1`. The replacement creates a `skipped` / `other-origin` record for `https://external.com/page`, so the result has two records.
-- `sortPages`. [backend/tests/report.test.js](backend/tests/report.test.js) expects rows ordered by descending hit count. Reporters will not re-sort. `pages` stays in creation order, which commit order makes stable. `sortPages` leaves with the hit-count map.
+- `maxPages: Infinity`. Rewritten. [backend/tests/crawl-config.test.js](backend/tests/crawl-config.test.js) rejects `Infinity`. The default is `50`.
+- The hit-count map. Rewritten. The engine stores one `PageResult` per key. A non-HTML response is `skipped` / `non-html`. Repeat discoveries do not increment a count.
+- Exclusive depth. Rewritten. `maxDepth` is inclusive. A link past the limit is a `depth-limit` record, and the page at the limit is fetched.
+- Dropped external links. Rewritten. An external link is a `skipped` / `other-origin` record.
+- `sortPages`. Still locked by [backend/tests/report.test.js](backend/tests/report.test.js), which expects rows ordered by descending hit count. The engine already returns `pages` in creation order. The reporter rewrite is Milestone 3, next to removing the Desktop path.
 
 #### Worker loop
 
@@ -755,7 +756,20 @@ The same example shows termination. After `S` is taken, the queue is empty and `
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 141 tests. No `test.failing` remains. `sortPages` still sorts by hit count.
 - **Lesson learned:** Two fixture servers get two ports, so the page arrays match only after the origin is removed. The record order does not.
 
+### 2026-10-10 - Milestone 1 cleanup
+
+- **Problem:** `linksInCommitOrder` caught `canonicalKey` and skipped the link. A throw after the link pipeline has already filtered the URL is a bug and must stop the crawl. Four redirect failures had no test. The open `sortPages` checkbox made Milestone 1 look unfinished.
+- **Chosen solution:** `canonicalKey` is called without a catch. The worker commits inside `try`, so that throw reaches the worker catch, starts fatal-stop, and `crawl()` rejects with the same object. Fixture tests cover a missing `Location`, an unparseable `Location`, userinfo, an `ftp:` hop, and a sixth hop. The depth-0 fixture crawl asserts the default User-Agent. `sortPages` moved to Milestone 3. `report.js` is unchanged.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 147 tests.
+- **Lesson learned:** The link filter and the key are two steps. Swallowing the second step hides a bug in the first.
+
 ## Change Log
+
+### 2026-10-10 (Milestone 1 cleanup)
+
+- A `canonicalKey` throw during commit is fatal and rejects with the same error object.
+- Fixture tests cover a missing, unparseable, userinfo, and non-http redirect, plus a sixth hop.
+- Moved the `sortPages` rewrite to Milestone 3. Milestone 2 is the active milestone, and its checkpoint is not written yet.
 
 ### 2026-10-10 (Fixture tests)
 

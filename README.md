@@ -20,7 +20,7 @@ This is a hands-on project for learning HTTP, scheduling, and the limits of a si
 
 ## Still open
 
-These are known gaps, not future ideas. The remaining Milestone 1 item is the `sortPages` rewrite. Milestones 2 and 3 own the rest.
+These are known gaps, not future ideas. Milestone 1 is complete. Milestone 2 owns timeouts, size limits, retries, and robots. Milestone 3 owns the reporter, including `sortPages` and the Desktop path.
 
 - Page fetches have no timeout and no size cap.
 - Robots is an allow-all stand-in. `robots-parser` is unused.

@@ -175,6 +175,7 @@ async function runWorker(frontier, gate, robots, http, clock, logger, startOrigi
       } else {
         await fetchRecord(item, lease, http, robots, frontier, clock, startOrigin);
       }
+      frontier.commit(item);
     } catch (error) {
       item.links = [];
       frontier.fail(error, logger);
