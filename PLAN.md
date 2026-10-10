@@ -324,8 +324,35 @@ The file is `${origin}/robots.txt`. The product token is the configured `userAge
 ### Output and shutdown
 
 - The engine returns a `CrawlResult`. Reporters format it. The engine does not write files and does not choose a Desktop path.
-- Formats: console summary, JSON, and CSV. CSV quoting covers commas, quotes, and newlines. CSV columns are the `PageResult` fields in contract order. `null` is an empty cell.
+- There is no Desktop report. `printReport`, `getDesktopPath`, and `saveToCSV` are deleted in Milestone 3. Nothing writes a CSV because the platform looks like Windows, WSL, or macOS. A file is written only when the CLI is given `--output`.
+- Formats: console summary, JSON, and CSV. CSV is the machine table, not the human report. Its quoting covers commas, quotes, and newlines. Its columns are the `PageResult` fields in contract order. `null` is an empty cell. JSON is `CrawlResult` with no extra fields.
+- The console summary is the default human report. It replaces the one-line `Crawled N pages, ...` string and the old `Found N links to page ...` lines. Pages stay in creation order. There is no hit-count sort. A `null` field is omitted, not printed as `null`.
+- The summary is exactly these lines, with a blank line between the three blocks. Counts are always printed, including zeros.
+
+```text
+completed https://example.com/ 840ms
+reserved 4 fetched 2 ok 1 skipped 2 failed 1 queued 0
+
+ok 200 https://example.com/ depth 0
+skipped https://example.com/secret depth 1 robots
+failed 404 https://example.com/missing depth 1 http-status HTTP 404
+skipped https://example.com/notes.txt depth 1 non-html
+queued https://example.com/later depth 1
+
+robots https://example.com allow-all 404
+```
+
+- Line 1 is `{stopReason} {startUrl} {durationMs}ms`.
+- Line 2 is the six counts in that order: `reserved`, `fetched`, `ok`, `skipped`, `failed`, `queued`.
+- Then one line per page, in `pages` order:
+  - `ok {statusCode} {canonicalUrl} depth {depth}`
+  - `skipped {canonicalUrl} depth {depth} {skipReason}`
+  - `failed {statusCode} {canonicalUrl} depth {depth} {errorKind} {errorMessage}` when `statusCode` is not null. When it is null, omit it: `failed {canonicalUrl} depth {depth} {errorKind} {errorMessage}`
+  - `queued {canonicalUrl} depth {depth}`
+- When `finalUrl` is not null and is not `requestedUrl`, append `final {finalUrl}` to that page line. That is how a redirect stays visible. `discoveredFrom`, `waitedMs`, `contentType`, `byteLength`, and `attempts` stay in JSON and CSV. They are not on the console line.
+- Then one line per robots entry, in result order: `robots {origin} {outcome} {statusCode}`. Append `{errorKind}` only when it is not null. Omit `{statusCode}` when it is null.
 - stdout carries one artifact. With `--format console` (the default), the summary goes to stdout. With `--format json` or `csv` and no `--output`, that format goes to stdout and the summary goes to stderr. With `--output`, the chosen format is written to that path, and the summary goes to stdout.
+- This report is Milestone 3. Milestone 2 does not print it and does not delete `report.js`.
 - On the first SIGINT, stop handing out queued items, let in-flight items finish including their retries, reserve nothing from any commit after the signal (the stopping rule in Commit order), write the partial `CrawlResult` with `stopReason: "interrupted"`, and exit `0`. A second SIGINT exits `130` immediately without writing.
 
 ### Result shapes
@@ -412,12 +439,12 @@ Integration tests use a real server, not a `fetch` mock.
 
 ## Current Status
 
-**Active milestone:** Milestone 2 - HTTP policy and robots. The checkpoint is approved. Timeout, the byte limit, network kinds, retries, the robots manager, and the politeness gate are in place. Fixture checks for pace and concurrency are still open.
+**Active milestone:** Milestone 2 - HTTP policy and robots. The checklist is complete. Milestone 3 has not started.
 
 **Known behavior of the code today:**
 
 - `[x]` A frontier crawl, config validation, a robots manager on `robots-parser`, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 196 tests.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 207 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
 - `[x]` `npm start` from `backend/` runs `src/main.js`.
@@ -432,7 +459,7 @@ Integration tests use a real server, not a `fetch` mock.
 - `[x]` Retries stay inside the HTTP client. `timeout`, `connect`, `reset`, and `429`/`500`/`502`/`503`/`504` retry. `dns`, `tls`, `too-large`, redirects, and every other status do not. Backoff runs through the clock before `beforeAttempt`. `Retry-After` on `429` or `503` can only raise that wait, and a wait above 5000 ms returns the response. Fatal-stop ends the sleep and does not abort `fetch`.
 - `[x]` `robots-parser` decides allow and crawl-delay. One `robots.txt` fetch is shared per origin, on the worker's existing lease. A disallowed path is `skipped` / `robots` and is not requested. An unavailable file is `skipped` / `robots-unavailable`. The custom parser is gone.
 - `[x]` The politeness gate is a per-origin FIFO of leases. `beforeAttempt` claims `nextAllowedAt` before it waits. The gap is `minIntervalMs` until a parsed crawl-delay is larger, then that delay, capped at 10 seconds. `waitedMs` runs from `take()` through that page's own gap. Fatal-stop ends the wait and does not release a held lease.
-- `[!]` `printReport` still writes a CSV onto a guessed Desktop path, including a Windows path when run from WSL. The macOS branch is unreachable. `npm start` no longer calls it. `sortPages` still sorts by hit count.
+- `[!]` `printReport` still writes a CSV onto a guessed Desktop path, including a Windows path when run from WSL. The macOS branch is unreachable. `npm start` does not call it. The terminal still prints one counts line. Replacing that with the console summary, and deleting the Desktop writer, is Milestone 3. It is not the next Milestone 2 item.
 - `[x]` Node is pinned to 24, and ESLint checks `backend/`.
 
 ## Milestones
@@ -511,7 +538,7 @@ Checkpoint approved 2026-10-10. The decision table and politeness cases in the l
 - `[x]` Implement the politeness gate: per-origin FIFO leases, `nextAllowedAt` set before waiting, gap on every attempt, crawl-delay from the robots manager after a successful parse, `waitedMs` as specified.
 - `[x]` Unit-test the gate and the retry delays with a fake clock, including the case where backoff already passed the gap.
 - `[x]` Delete `backend/src/crawler/robots.js` and `backend/tests/robots.test.js` in the same change.
-- `[ ]` Fixture and injected-client tests:
+- `[x]` Fixture and injected-client tests:
   - disallowed path is never requested
   - redirect into a disallowed path is never requested
   - missing `robots.txt` (404) allows the origin
@@ -527,6 +554,8 @@ Checkpoint approved 2026-10-10. The decision table and politeness cases in the l
 
 **Done when:** a disallowed path is never requested, including through a redirect. A timeout becomes a failed `PageResult` rather than a hung process. `perOriginLimit: 1` still completes a crawl that must fetch `robots.txt`. A same-origin run never has more than `perOriginLimit` requests in flight. Consecutive request starts to one origin are at least `minIntervalMs` apart in the fixture log. `npm run verify` is green and the custom parser is gone.
 
+The console summary in Output is not part of this milestone.
+
 ### Milestone 3 - CLI and reports
 
 **Goal:** The CLI is a thin adapter. Scripts can depend on the exit code and the JSON shape.
@@ -534,13 +563,13 @@ Checkpoint approved 2026-10-10. The decision table and politeness cases in the l
 - `[ ]` Parse with `node:util` `parseArgs`. Accept a positional URL plus `--depth`, `--max-pages`, `--concurrency`, `--per-origin`, `--min-interval`, `--timeout`, `--user-agent`, `--no-respect-robots`, `--format`, and `--output`.
 - `[ ]` Validate the URL and every number. Preserve an explicit `0` for depth. Unknown flags are errors.
 - `[ ]` Use exit codes `0`, `1`, `2`, and `130` as specified above.
-- `[ ]` Emit console, JSON, and CSV from `CrawlResult`, following the one-artifact-on-stdout rule. CSV escapes commas, quotes, and newlines.
-- `[ ]` Write files only to `--output`. Remove the Desktop path.
-- `[ ]` Rewrite `sortPages` and [backend/tests/report.test.js](backend/tests/report.test.js). Reporters keep `pages` in creation order. Remove the hit-count sort together with the Desktop path.
+- `[ ]` Emit the console summary from Output, plus JSON and CSV, from `CrawlResult`, following the one-artifact-on-stdout rule. CSV escapes commas, quotes, and newlines. The console text matches the sample, including a skipped page, a failed page, a redirect `final` suffix, and a robots line.
+- `[ ]` Write files only to `--output`. Delete `getDesktopPath`, `saveToCSV`, and `printReport` in that change. No guessed Desktop path remains.
+- `[ ]` Delete `sortPages` and rewrite [backend/tests/report.test.js](backend/tests/report.test.js). The console summary and every other reporter keep `pages` in creation order. The hit-count sort goes away with the Desktop writer.
 - `[ ]` On SIGINT, stop handing out items, finish in-flight work, and emit the partial result.
 - `[ ]` Test the CLI as a child process against the fixture: bad arguments, explicit `0`, JSON shape, JSON on stdout being parseable, CSV escaping, and a crawl that includes a failed page.
 
-**Done when:** `node backend/src/main.js` against the fixture prints a summary a stranger can read, and JSON matches the result shape.
+**Done when:** `node backend/src/main.js` against the fixture prints the console summary from Output, a stranger can see which pages were fetched, skipped, and failed, no CSV is written to a Desktop path, and JSON matches the result shape.
 
 ### Milestone 4 - CV cutoff
 
@@ -916,7 +945,24 @@ These replace the looser readings from the first draft of this checkpoint.
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 196 tests. A fake clock covers the FIFO, the claimed start time, crawl-delay, and both backoff cases. `perOriginLimit: 1` completes a crawl that fetches `robots.txt`.
 - **Lesson learned:** The gap and the lease are different waits. Holding a lease is not permission to start early, and crawl-delay cannot be known until the file has been parsed.
 
+### 2026-10-10 - Fixture policy
+
+- **Problem:** The robots table, retries, and the politeness limits were locked in unit tests. The fixture log did not yet show that a disallowed path stays unrequested, that same-origin starts keep the gap, or that peak concurrency stays inside `perOriginLimit`.
+- **Chosen solution:** The local server records every request, including `robots.txt`. A disallowed path and a redirect into one are absent from that log. `robots.txt` 500 is retried, then the origin is `robots-unavailable`. `503` becomes `ok` on the next attempt. `Retry-After: 1` waits 1000 ms, and `Retry-After: 6` is not retried. Two workers share one `robots.txt` fetch. `perOriginLimit: 1` finishes. Peak concurrency is 2 when the limit is 2. Consecutive starts are 200 ms apart, including `robots.txt`. `respectRobots: false` fetches the disallowed path and does not apply crawl-delay.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 207 tests. The spacing and `Retry-After` cases use a clock whose `sleep` advances `now`, and the fixture log reads that same clock.
+- **Lesson learned:** The server log is the proof of what was requested. A skipped page record is not enough, because the request can still have left the process.
+
 ## Change Log
+
+### 2026-10-10 (Fixture policy)
+
+- Locked robots, retries, and politeness against the fixture log: disallowed paths stay unrequested, retries and `Retry-After` follow the table, and same-origin pace stays inside the limit and the gap.
+
+### 2026-10-10 (Console summary)
+
+### 2026-10-10 (Console summary)
+
+- The human report is the console summary in Output: one header, one line per page, then robots. Desktop CSV is not a report. Deleting it waits for Milestone 3.
 
 ### 2026-10-10 (Politeness gate)
 

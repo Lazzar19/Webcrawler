@@ -18,6 +18,24 @@ function redirect(statusCode, location) {
   };
 }
 
+function text(body, statusCode = 200, headers = {}) {
+  return (_req, res) => {
+    res.writeHead(statusCode, { "content-type": "text/plain", ...headers });
+    res.end(body);
+  };
+}
+
+function steppingClock() {
+  let time = 0;
+  return {
+    now: () => time,
+    sleep(ms) {
+      time += ms;
+      return Promise.resolve();
+    },
+  };
+}
+
 function delay(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -535,6 +553,310 @@ describe("fixture crawl", () => {
         expect(result.pages[0].errorKind).toBe("too-large");
       }
     );
+  });
+
+  test("two workers share one robots.txt fetch", async () => {
+    await withServer(
+      {
+        "/": html('<a href="/a"></a>'),
+        "/a": html("<html></html>"),
+      },
+      async (server) => {
+        const result = await crawlOrigin(server, { maxDepth: 1, maxPages: 10, concurrency: 2 });
+        expect(paths(server).filter((path) => path === "/robots.txt")).toEqual(["/robots.txt"]);
+        expect(result.pages.every((page) => page.state === "ok")).toBe(true);
+      }
+    );
+  });
+
+  test("perOriginLimit 1 still completes when robots.txt is fetched", async () => {
+    await withServer(
+      {
+        "/": html('<a href="/a"></a>'),
+        "/a": html("<html></html>"),
+      },
+      async (server) => {
+        const result = await crawlOrigin(server, {
+          maxDepth: 1,
+          maxPages: 10,
+          concurrency: 2,
+          perOriginLimit: 1,
+        });
+        expect(result.pages.map((page) => page.state)).toEqual(["ok", "ok"]);
+        expect(paths(server)).toContain("/robots.txt");
+      }
+    );
+  });
+
+  test("a disallowed path is never requested", async () => {
+    await withServer(
+      {
+        "/robots.txt": text("User-agent: *\nDisallow: /secret\n"),
+        "/": html('<a href="/secret"></a>'),
+        "/secret": html("no"),
+      },
+      async (server) => {
+        const result = await crawlOrigin(server, { maxDepth: 1, maxPages: 10, concurrency: 1 });
+        expect(paths(server)).toEqual(["/robots.txt", "/"]);
+        expect(result.pages.map((page) => page.skipReason)).toEqual([null, "robots"]);
+      }
+    );
+  });
+
+  test("a redirect into a disallowed path is never requested", async () => {
+    await withServer(
+      {
+        "/robots.txt": text("User-agent: *\nDisallow: /secret\n"),
+        "/": redirect(302, "/secret"),
+        "/secret": html("no"),
+      },
+      async (server) => {
+        const result = await crawlOrigin(server, { maxDepth: 1, maxPages: 10, concurrency: 1 });
+        expect(paths(server)).toEqual(["/robots.txt", "/"]);
+        expect(result.pages[0].skipReason).toBe("robots");
+      }
+    );
+  });
+
+  test("a missing robots.txt allows the origin", async () => {
+    await withServer(
+      {
+        "/": html("<html></html>"),
+      },
+      async (server) => {
+        const result = await crawlOrigin(server, { maxDepth: 0, maxPages: 1, concurrency: 1 });
+        expect(paths(server)).toEqual(["/robots.txt", "/"]);
+        expect(result.pages[0].state).toBe("ok");
+        expect(result.robots).toEqual([
+          {
+            origin: server.origin,
+            statusCode: 404,
+            outcome: "allow-all",
+            errorKind: null,
+          },
+        ]);
+      }
+    );
+  });
+
+  test("robots.txt 500 after retries skips the origin", async () => {
+    await withServer(
+      {
+        "/robots.txt": text("no", 500),
+        "/": html("<html></html>"),
+      },
+      async (server) => {
+        const result = await crawlOrigin(server, {
+          maxDepth: 0,
+          maxPages: 1,
+          concurrency: 1,
+          retryCount: 2,
+          retryBaseDelayMs: 0,
+        });
+        expect(paths(server)).toEqual(["/robots.txt", "/robots.txt", "/robots.txt"]);
+        expect(result.pages[0].skipReason).toBe("robots-unavailable");
+        expect(result.pages[0].attempts).toBe(0);
+        expect(result.robots[0]).toMatchObject({
+          outcome: "unavailable",
+          errorKind: "http-status",
+          statusCode: 500,
+        });
+      }
+    );
+  });
+
+  test("503 succeeds on retry", async () => {
+    let hits = 0;
+    await withServer(
+      {
+        "/": (_req, res) => {
+          hits += 1;
+          if (hits === 1) {
+            res.writeHead(503);
+            res.end("busy");
+            return;
+          }
+          res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+          res.end("<html></html>");
+        },
+      },
+      async (server) => {
+        const result = await crawlOrigin(server, {
+          maxDepth: 0,
+          maxPages: 1,
+          concurrency: 1,
+          retryCount: 1,
+          retryBaseDelayMs: 0,
+        });
+        expect(result.pages[0].state).toBe("ok");
+        expect(result.pages[0].attempts).toBe(2);
+        expect(paths(server).filter((path) => path === "/")).toEqual(["/", "/"]);
+      }
+    );
+  });
+
+  test("Retry-After raises the wait, and a value above 5000 ms is not retried", async () => {
+    const retryClock = steppingClock();
+    let hits = 0;
+    const server = createFixtureServer({
+      clock: retryClock,
+      routes: {
+        "/": (_req, res) => {
+          hits += 1;
+          if (hits === 1) {
+            res.writeHead(429, { "retry-after": "1" });
+            res.end("later");
+            return;
+          }
+          res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+          res.end("<html></html>");
+        },
+      },
+    });
+    await server.listen();
+    try {
+      const result = await crawl(
+        {
+          startUrl: `${server.origin}/`,
+          maxDepth: 0,
+          maxPages: 1,
+          concurrency: 1,
+          minIntervalMs: 0,
+          retryCount: 1,
+          retryBaseDelayMs: 0,
+        },
+        { clock: retryClock }
+      );
+      const pageStarts = server.requests.filter((request) => request.path === "/").map((request) => request.startedAt);
+      expect(pageStarts).toEqual([0, 1000]);
+      expect(result.pages[0].state).toBe("ok");
+    } finally {
+      await server.close();
+    }
+
+    const blocked = steppingClock();
+    const once = createFixtureServer({
+      clock: blocked,
+      routes: {
+        "/": text("no", 429, { "retry-after": "6" }),
+      },
+    });
+    await once.listen();
+    try {
+      const result = await crawl(
+        {
+          startUrl: `${once.origin}/`,
+          maxDepth: 0,
+          maxPages: 1,
+          concurrency: 1,
+          minIntervalMs: 0,
+          retryCount: 2,
+          retryBaseDelayMs: 0,
+        },
+        { clock: blocked }
+      );
+      expect(once.requests.filter((request) => request.path === "/")).toHaveLength(1);
+      expect(result.pages[0].state).toBe("failed");
+      expect(result.pages[0].errorKind).toBe("http-status");
+      expect(blocked.now()).toBe(0);
+    } finally {
+      await once.close();
+    }
+  });
+
+  test("same-origin peak concurrency stays within perOriginLimit", async () => {
+    const child = async (_req, res) => {
+      await delay(80);
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end("<html></html>");
+    };
+    await withServer(
+      {
+        "/": html('<a href="/a"></a><a href="/b"></a><a href="/c"></a><a href="/d"></a>'),
+        "/a": child,
+        "/b": child,
+        "/c": child,
+        "/d": child,
+      },
+      async (server) => {
+        await crawlOrigin(server, {
+          maxDepth: 1,
+          maxPages: 10,
+          concurrency: 4,
+          perOriginLimit: 2,
+        });
+        expect(server.peakConcurrency).toBe(2);
+      }
+    );
+  });
+
+  test("consecutive request starts on one origin are at least minIntervalMs apart", async () => {
+    const pace = steppingClock();
+    const server = createFixtureServer({
+      clock: pace,
+      routes: {
+        "/": html('<a href="/a"></a>'),
+        "/a": html("<html></html>"),
+      },
+    });
+    await server.listen();
+    try {
+      await crawl(
+        {
+          startUrl: `${server.origin}/`,
+          maxDepth: 1,
+          maxPages: 10,
+          concurrency: 1,
+          perOriginLimit: 1,
+          minIntervalMs: 200,
+        },
+        { clock: pace }
+      );
+      const starts = server.requests.map((request) => request.startedAt);
+      expect(server.requests.map((request) => request.path)).toEqual(["/robots.txt", "/", "/a"]);
+      expect(starts).toEqual([0, 200, 400]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("respectRobots false fetches a disallowed path and ignores crawl-delay", async () => {
+    const pace = steppingClock();
+    const server = createFixtureServer({
+      clock: pace,
+      routes: {
+        "/robots.txt": text("User-agent: *\nDisallow: /secret\nCrawl-delay: 30\n"),
+        "/": html('<a href="/secret"></a>'),
+        "/secret": html("<html></html>"),
+      },
+    });
+    await server.listen();
+    try {
+      const result = await crawl(
+        {
+          startUrl: `${server.origin}/`,
+          maxDepth: 1,
+          maxPages: 10,
+          concurrency: 1,
+          minIntervalMs: 0,
+          respectRobots: false,
+        },
+        { clock: pace }
+      );
+      expect(paths(server)).toEqual(["/", "/secret"]);
+      expect(result.pages.every((page) => page.state === "ok")).toBe(true);
+      expect(pace.now()).toBe(0);
+      expect(result.robots).toEqual([
+        {
+          origin: server.origin,
+          statusCode: null,
+          outcome: "not-checked",
+          errorKind: null,
+        },
+      ]);
+    } finally {
+      await server.close();
+    }
   });
 
   test("a ten-link fan-out at depth 2 finishes with five workers", async () => {
