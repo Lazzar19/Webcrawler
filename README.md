@@ -20,9 +20,9 @@ This is a hands-on project for learning HTTP, scheduling, and the limits of a si
 
 ## Still open
 
-These are known gaps, not future ideas. Milestone 1 is complete. Milestone 2 owns timeouts, size limits, retries, and robots. Milestone 3 owns the reporter, including `sortPages` and the Desktop path.
+These are known gaps, not future ideas. Milestone 1 is complete. The HTTP client now times out and stops an oversized body. Milestone 2 still owns retries, robots, and politeness. Milestone 3 owns the reporter, including `sortPages` and the Desktop path.
 
-- Page fetches have no timeout and no size cap.
+- Retries are not implemented yet. A failed attempt is final.
 - Robots is an allow-all stand-in. `robots-parser` is unused.
 - `printReport` still writes a CSV onto a guessed Desktop path. `npm start` does not call it.
 - `sortPages` still sorts by hit count.

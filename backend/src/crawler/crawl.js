@@ -29,7 +29,7 @@ function skipPage(page, skipReason) {
   page.skipReason = skipReason;
 }
 
-async function fetchRecord(item, lease, http, robots, frontier, clock, startOrigin) {
+async function fetchRecord(item, lease, http, robots, frontier, clock, startOrigin, config) {
   const page = item.page;
   let currentUrl = page.requestedUrl;
   page.finalUrl = currentUrl;
@@ -42,6 +42,7 @@ async function fetchRecord(item, lease, http, robots, frontier, clock, startOrig
     let response;
     try {
       response = await http.get(currentUrl, {
+        maxBytes: config.maxResponseBytes,
         async beforeAttempt() {
           if (!notedWait) {
             page.waitedMs = clock.now() - item.takenAt;
@@ -158,7 +159,7 @@ async function fetchRecord(item, lease, http, robots, frontier, clock, startOrig
   }
 }
 
-async function runWorker(frontier, gate, robots, http, clock, logger, startOrigin) {
+async function runWorker(frontier, gate, robots, http, clock, logger, startOrigin, config) {
   for (;;) {
     const item = await frontier.take();
     if (item === null) {
@@ -173,7 +174,7 @@ async function runWorker(frontier, gate, robots, http, clock, logger, startOrigi
         item.page.skipReason = decision.reason;
         item.links = [];
       } else {
-        await fetchRecord(item, lease, http, robots, frontier, clock, startOrigin);
+        await fetchRecord(item, lease, http, robots, frontier, clock, startOrigin, config);
       }
       frontier.commit(item);
     } catch (error) {
@@ -208,6 +209,7 @@ async function crawl(configInput, dependencies = {}) {
     fetchImpl: dependencies.fetchImpl,
     clock,
     userAgent: config.userAgent,
+    timeoutMs: config.timeoutMs,
   });
   const gate = createPolitenessGate();
   const robots = createRobotsCheck();
@@ -228,7 +230,7 @@ async function crawl(configInput, dependencies = {}) {
   const startOrigin = new URL(config.startUrl).origin;
   const workers = [];
   for (let index = 0; index < config.concurrency; index += 1) {
-    workers.push(runWorker(frontier, gate, robots, http, clock, logger, startOrigin));
+    workers.push(runWorker(frontier, gate, robots, http, clock, logger, startOrigin, config));
   }
 
   try {

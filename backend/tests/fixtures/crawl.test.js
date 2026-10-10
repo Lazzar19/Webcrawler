@@ -478,6 +478,62 @@ describe("fixture crawl", () => {
     });
   });
 
+  test("a response that never finishes is a failed timeout page", async () => {
+    await withServer(
+      {
+        "/": (_req, res) => {
+          res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+          res.write("<html>");
+        },
+      },
+      async (server) => {
+        const result = await crawl(
+          {
+            startUrl: `${server.origin}/`,
+            maxDepth: 0,
+            maxPages: 1,
+            concurrency: 1,
+            minIntervalMs: 0,
+            timeoutMs: 80,
+          }
+        );
+        expect(result.pages).toHaveLength(1);
+        expect(result.pages[0].state).toBe("failed");
+        expect(result.pages[0].errorKind).toBe("timeout");
+        expect(result.counts.failed).toBe(1);
+      }
+    );
+  });
+
+  test("a body over the byte limit is a failed too-large page", async () => {
+    await withServer(
+      {
+        "/": (_req, res) => {
+          const body = "x".repeat(1000);
+          res.writeHead(200, {
+            "content-type": "text/html; charset=utf-8",
+            "content-length": String(body.length),
+          });
+          res.end(body);
+        },
+      },
+      async (server) => {
+        const result = await crawl(
+          {
+            startUrl: `${server.origin}/`,
+            maxDepth: 0,
+            maxPages: 1,
+            concurrency: 1,
+            minIntervalMs: 0,
+            maxResponseBytes: 10,
+          }
+        );
+        expect(result.pages[0].state).toBe("failed");
+        expect(result.pages[0].errorKind).toBe("too-large");
+      }
+    );
+  });
+
   test("a ten-link fan-out at depth 2 finishes with five workers", async () => {
     const routes = {};
     const linkList = (prefix) =>

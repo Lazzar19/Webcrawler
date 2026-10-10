@@ -72,6 +72,9 @@ These apply to every change made by an agent, including Grok. They exist because
 - Reporters receive a finished `CrawlResult`. They do not crawl, filter, deduplicate, or re-sort pages.
 - The engine does not write to stdout and does not write files. Logs go to the injected logger, which writes to stderr by default.
 - Do not wrap worker code in a catch-all that turns unknown exceptions into page failures. Only errors classified in [Error taxonomy](#error-taxonomy) become page records. Anything else is a fatal error.
+- The robots manager never acquires a lease and never calls `fetch`. It uses the worker's current lease and the injected HTTP client. Only the worker that actually performs the `robots.txt` fetch calls `beforeAttempt` for that fetch. Waiters on the cached promise do not.
+- Do not implement a second robots matcher. `robots-parser` is the only allow and crawl-delay implementation.
+- Fatal-stop may cut a politeness or retry sleep short. It does not abort an in-flight `fetch`. SIGINT does not cut those sleeps.
 - Keep CommonJS and plain JavaScript. Do not migrate to ESM or TypeScript.
 
 ## Cemented Behavior
@@ -169,8 +172,8 @@ Worker loop:
 1. `item = await frontier.take()`. `null` means the crawl is over, and the worker returns.
 2. The record is now `fetching` and has its dequeue sequence number. `take()` assigns both synchronously before it returns the item, so every item a worker holds already has a number.
 3. Acquire the politeness lease for the item's origin (see Politeness).
-4. Check robots. The check stays at this point in the loop for every milestone. In Milestone 1 the check is a stand-in that always allows the URL. It does not fetch `robots.txt`, parse it, cache it, fail closed, or apply `Crawl-delay`. `respectRobots` is stored and does not change the stand-in. Milestone 2 replaces the stand-in with the robots manager. The call site does not move. A real disallow is `skipped` / `robots`. A real unavailable file is `skipped` / `robots-unavailable`. Neither contributes links.
-5. If the check allows the URL, run the redirect loop (see Redirects). Each network attempt calls the lease's `beforeAttempt`. In Milestone 1, `beforeAttempt` returns immediately.
+4. Check robots at this point, with the lease already held: `robots.check(url, { beforeAttempt: lease.beforeAttempt })`. A disallow is `skipped` / `robots`. An unavailable file is `skipped` / `robots-unavailable`. Neither contributes links. The call site does not move.
+5. If the check allows the URL, run the redirect loop (see Redirects). Each page network attempt calls the same lease's `beforeAttempt`.
 6. Classify the response. If it is HTML, extract links.
 7. Release the lease.
 8. Commit the item with its links (see Commit order). This always happens, in a `finally`, including after a skip or a classified failure.
@@ -183,7 +186,8 @@ Fatal stop: an exception that is not a classified page failure. The frontier ent
 
 - It does not hand out any further queued item.
 - Every `take()` that is already waiting resolves with `null`, so no worker stays blocked in `take()`. A worker that receives that `null` returns. It has no item and does not commit.
-- A politeness wait is released the same way, without throwing a second error. Milestone 1 does not wait, because `acquire` returns immediately. Milestone 2 must release the lease wait on fatal-stop, or a worker can sit there forever.
+- A politeness `beforeAttempt` wait and an HTTP retry sleep end early. They resolve without throwing. The in-flight `fetch` is not aborted. The worker continues the item it already holds: it finishes the current attempt or retry loop, then commits. A cancelled sleep is not itself a page failure.
+- A worker blocked in `acquire` is not woken by fatal-stop directly. It is released when a holder hits `finally` and calls `release()`, then it acquires and finishes its item. It must not sit in the FIFO forever, and it must not poll.
 - The worker that threw holds an item, so it has a sequence number. Its `finally` commits that number with an empty link list if it has not committed yet, then rethrows the same exception object.
 - Any other worker that already holds an item finishes that item and commits it.
 - While stopping, commits follow the stopping rule in Commit order: `nextCommit` still advances, and nothing is reserved.
@@ -214,7 +218,7 @@ The HTTP client does not follow redirects. The worker runs the redirect loop bec
 - If the hop leaves the start origin, the record is `skipped` / `redirect-off-origin`. The off-origin URL is not requested.
 - If the hop key equals the record's own key or an earlier hop in this chain, the record is `failed` / `redirect-loop`.
 - If the hop key is already in `seen` and owned by another record, this record is `skipped` / `duplicate`. That URL is not requested here. The other record owns it.
-- Otherwise add the hop key to `seen` as an alias owned by this record. An alias does not consume a `maxPages` slot. Check robots for the hop with the same function as step 4 of the worker loop. In Milestone 1 that check is the allow-all stand-in. If allowed, request the hop's resolved spelling, with the fragment removed, not the canonical key.
+- Otherwise add the hop key to `seen` as an alias owned by this record. An alias does not consume a `maxPages` slot. Check robots for the hop with the same function as step 4 of the worker loop, passing the same lease `beforeAttempt`. If allowed, request the hop's resolved spelling, with the fragment removed, not the canonical key.
 - More than 5 hops is `failed` / `redirect-limit`. A redirect status without `Location`, or a hop URL with a username or password, is `failed` / `bad-redirect`. The userinfo hop is not requested.
 - `finalUrl` is the last requested URL. Links are resolved against it. The record keeps its original depth and `discoveredFrom`.
 
@@ -228,10 +232,11 @@ The HTTP client does not follow redirects. The worker runs the redirect loop bec
 - A robots `Crawl-delay` larger than `minIntervalMs` replaces the gap for that origin, capped at 10 seconds.
 - The gap applies to every attempt: first attempts, retries, redirect hops, and `robots.txt`.
 - Each origin stores `nextAllowedAt`. `beforeAttempt` computes `startAt = max(now, nextAllowedAt)`, sets `nextAllowedAt = startAt + gap` synchronously, then waits until `startAt` through the clock. Setting `nextAllowedAt` before awaiting prevents two workers from claiming the same start time.
-- `waitedMs` is the time from `take()` to the start of the first network attempt for that record. It covers waiting for the lease and for the gap.
+- `waitedMs` is the time from `take()` to that page's own first `beforeAttempt`. Fetching `robots.txt` does not set it. A record skipped before its own page request keeps `waitedMs` null. When the page is fetched, the value includes time spent on the lease, the robots fetch, and the gap.
 - On a single-origin crawl, `perOriginLimit` is the limit you can see. `concurrency` still matters as the ceiling, and as the number of workers waiting on that origin.
-
-Milestone 1 leaves a gate whose `acquire` and `beforeAttempt` return immediately. Milestone 2 gives that gate the limits above. The engine calls it identically in both milestones.
+- Crawl-delay from a parsed `robots.txt` is seconds × 1000. It replaces `minIntervalMs` only when it is larger, then it is capped at 10000. A missing delay, a smaller delay, `allow-all`, `unavailable`, and `not-checked` leave the gap at `minIntervalMs`. The `robots.txt` fetch itself always uses `minIntervalMs`. The parsed delay applies to later attempts on that origin, including the page request that triggered the fetch.
+- The gate asks the robots manager for the current gap. It does not parse `robots.txt`.
+- Fatal-stop races each `clock.sleep` against an internal abort that `frontier.fail` trips. The race resolves; it does not throw. SIGINT uses the existing `signal` and does not trip that abort, so in-flight work keeps the gap and the backoff.
 
 ### Page states
 
@@ -245,13 +250,13 @@ A skipped or failed URL is a record in the result. It is not a successful page. 
 
 ### HTTP client
 
-One module owns `fetch`. It is created with injected dependencies: `createHttpClient({ fetchImpl, clock, userAgent, timeoutMs, retryCount, retryBaseDelayMs })`. `fetchImpl` defaults to the global `fetch`.
+One module owns `fetch`. It is created with injected dependencies: `createHttpClient({ fetchImpl, clock, userAgent, timeoutMs, retryCount, retryBaseDelayMs, fatalSignal })`. `fetchImpl` defaults to the global `fetch`. `fatalSignal` is the internal abort from `crawl()`. It cancels retry sleeps only.
 
 `get(url, { maxBytes, beforeAttempt, wantBody })`:
 
-- Sends `redirect: 'manual'`, the configured `User-Agent`, and `Accept: text/html,application/xhtml+xml;q=0.9,*/*;q=0.1`. No cookies.
+- Sends `redirect: 'manual'`, the configured `User-Agent`, and `Accept: text/html,application/xhtml+xml;q=0.9,*/*;q=0.1`. No cookies. The same headers are used for `robots.txt`.
 - Before each attempt, awaits `beforeAttempt()`. The client does not compute politeness. It only calls the hook.
-- Each attempt has its own timeout of `timeoutMs` that covers headers and body. Use `AbortSignal.timeout`.
+- Each attempt has its own timeout of `timeoutMs` that covers headers and body. Use `AbortSignal.timeout`. Do not attach the fatal-stop abort to the `fetch` itself.
 - After headers arrive, it calls `wantBody({ statusCode, contentType })`. If that returns false, or the status is not 2xx, the body is cancelled without reading. A body is always either fully read or cancelled, so no connection is left open.
 - If `Content-Length` exceeds `maxBytes`, the attempt fails `too-large` without reading. Otherwise the body stream is read and its decoded bytes are counted. Passing `maxBytes` aborts the read and fails `too-large`.
 - The body is decoded as UTF-8 with `TextDecoder`.
@@ -265,8 +270,8 @@ Retries live in the HTTP client and consume the same reservation.
 - Retry: `timeout`, `connect`, `reset`, and status `429`, `500`, `502`, `503`, `504`.
 - Do not retry: `dns`, `tls`, `too-large`, any other status, and redirects.
 - Delay before retry `n` (starting at 1) is `min(5000, retryBaseDelayMs * 2^(n-1))`. There is no jitter, so tests are exact.
-- On `429` or `503`, a `Retry-After` header in seconds or as an HTTP date raises the delay to that value. If it is above 5000 ms, do not retry. Return that response.
-- The delay goes through the injected clock. The worker keeps its lease during the delay, and the retry still calls `beforeAttempt`.
+- On `429` or `503`, a `Retry-After` header can raise that wait, never lower it. A non-negative integer is seconds. Anything else is parsed as an HTTP date minus `now`; a date in the past is 0. A value that is neither an integer nor a date is ignored, and the backoff stands. The wait is `max(backoff, retryAfterMs)`. If that value is above 5000, do not retry. Return that response.
+- The client awaits the backoff through the injected clock first, then calls `beforeAttempt`, then starts the attempt. The worker keeps its lease during both waits. Backoff that already passed the gap is not followed by another full gap: `beforeAttempt` uses `max(now, nextAllowedAt)` as usual.
 
 ### Error taxonomy
 
@@ -295,19 +300,26 @@ Process-level errors:
 
 ### Robots
 
-Use the `robots-parser` dependency for allow/disallow and crawl-delay decisions. Do not keep a second production parser. The custom parser in `backend/src/crawler/robots.js` is removed once the library path is covered by tests.
+Use the `robots-parser` dependency for allow/disallow and crawl-delay decisions. Do not keep a second production parser. Delete `backend/src/crawler/robots.js` and `backend/tests/robots.test.js` in the same change as the manager.
 
-- The robots manager uses the injected HTTP client. It never calls `fetch`.
-- One `robots.txt` per origin per crawl. The cache stores the in-flight promise, so concurrent workers share one fetch. There is no TTL.
-- `robots.txt` is fetched with the 500 KiB limit and the normal retry policy. It follows up to 5 redirects itself, to any origin.
-- A 2xx response is parsed.
-- Any 4xx except `429` means the origin is allowed.
-- `429`, `5xx`, a network failure, `too-large`, or a redirect failure skips that origin's remaining URLs with reason `robots-unavailable`. This is fail-closed. The cause is recorded in the crawl's robots summary.
-- A path the file disallows is `skipped` / `robots`. Redirect hops are checked the same way, so a disallowed path is never requested.
-- Rules are matched for the product token of `userAgent`, the text before the first `/` or space (`WebcrawlerBot`).
-- Honor `Crawl-delay` for that token, capped at 10 seconds. When it is larger than `minIntervalMs`, it becomes the gap for that origin.
-- With `respectRobots: false`, robots is not fetched, and crawl-delay is not applied.
-- Sitemap URLs may be read and ignored. Sitemap crawling is out of scope.
+The file is `${origin}/robots.txt`. The product token is the configured `userAgent` up to, but not including, the first `/` or space. The default token is `WebcrawlerBot`. Pass that token to the library. The library matches it without case sensitivity. A group for that token does not inherit `User-agent: *`. A `*` group applies only when the token has no group of its own. `Sitemap` and `Host` are ignored. Longest match wins, including `Allow` beating a shorter `Disallow`.
+
+- The manager uses the injected HTTP client. It never calls `fetch` and never acquires a lease.
+- `check(url, { beforeAttempt })` is the only entry point from the worker. Redirect hops call the same function before they are requested.
+- One outcome per origin per crawl. The cache stores the in-flight promise, then that same settled result. There is no TTL. Two workers share one fetch. Only the worker that starts that fetch calls `beforeAttempt` for each robots attempt and robots redirect hop. A waiter only awaits the promise.
+- The worker already holds the page origin's lease. The manager uses that `beforeAttempt`. A second lease would deadlock when `perOriginLimit` is 1.
+- `robots.txt` is not a `PageResult`. It is not inserted into `seen` and does not consume `maxPages`.
+- Fetch with `maxBytes: 512000` (500 KiB) and the normal retry policy. This is a manager-owned redirect loop of at most 5 hops. It may leave the host. The HTTP client still does not follow redirects.
+- A 6th hop, a repeated hop, a missing or unparseable `Location`, a `Location` with userinfo, or a non-`http(s)` location is a robots redirect failure. The cache key and the summary stay on the origin that was asked. The final host is not crawled as a page.
+- 2xx: parse the body. Empty body allows every path and has no crawl-delay.
+- Any 4xx except `429`: the origin is allowed. No crawl-delay. Summary `outcome: "allow-all"`.
+- `429` or 5xx after retries: fail-closed. This record and every later record on this origin are `skipped` / `robots-unavailable`. Already fetched records stay as they are. Summary `outcome: "unavailable"`, `errorKind: "http-status"`.
+- Network failure, timeout, or `too-large` after retries: same skip. Summary `errorKind` is the `FetchError` kind. `statusCode` is null.
+- Robots redirect-loop failure: same skip. Summary `errorKind` is `bad-redirect`, `redirect-loop`, or `redirect-limit`.
+- A status that is not 2xx, not 4xx, and not a hop this loop follows (for example `304` or `100`) is `unavailable`.
+- A disallowed path is `skipped` / `robots`. The URL is not requested. A reserved skip still counts toward `maxPages`. `attempts`, `waitedMs`, and `errorKind` on that page stay empty. The cause lives on the robots summary.
+- With `respectRobots: false`, do not fetch, do not apply crawl-delay, allow every path. Summary `outcome: "not-checked"`.
+- Honor `Crawl-delay` for the product token as specified in Politeness.
 
 ### Output and shutdown
 
@@ -353,7 +365,8 @@ No report-only fields.
 Inject only what tests need to replace.
 
 - `crawl(config, { httpClient, clock, logger, signal })`. `config` is a plain object that includes `startUrl` and is validated as in Defaults. Each dependency defaults to the real implementation, so `crawl({ startUrl, ... })` with no second argument is a valid call.
-- `clock` is `{ now(), sleep(ms) }`. Every time measurement and every delay in the engine, HTTP client, and politeness gate goes through it. Unit tests use a fake clock. Integration tests may use the real clock with `minIntervalMs` and `retryBaseDelayMs` set to small values.
+- `clock` is `{ now(), sleep(ms) }`. Do not add a signal argument to `sleep`. Fatal-stop cancellation is `Promise.race` against an internal abort created inside `crawl()`, tripped only by `frontier.fail`. The HTTP client and the gate receive that abort. SIGINT does not trip it.
+- Every time measurement and every delay in the engine, HTTP client, and politeness gate goes through the clock. Unit tests use a fake clock. Integration tests may use the real clock with `minIntervalMs` and `retryBaseDelayMs` set to small values.
 - `logger` is `{ debug, info, warn, error }` and writes to stderr by default.
 - `signal` is the stop request used by the CLI for SIGINT.
 
@@ -369,8 +382,8 @@ Adding any other package is an edit to this section first.
 
 ### Toolchain
 
-- Node 24 LTS. `backend/.nvmrc`, the root `engines` field, CI, and the README badge agree. The current `18.7.0` pin is end-of-life and predates stable `fetch` and `AbortSignal.any`.
-- ESLint flat config with `@eslint/js` recommended rules and the Node and Jest globals. It catches undeclared variables and unused imports, both of which exist in the code today. `npm run lint` runs it. CI runs lint and tests.
+- Node 24 LTS. `backend/.nvmrc`, the root `engines` field, CI, and the README badge agree.
+- ESLint flat config with `@eslint/js` recommended rules and the Node and Jest globals. `npm run lint` runs it. CI runs lint and tests.
 - No TypeScript and no type checker. Result shapes are documented here and locked by tests. A JSDoc `@typedef` for `PageResult` and `CrawlResult` is allowed as documentation.
 
 ### Layout
@@ -399,12 +412,12 @@ Integration tests use a real server, not a `fetch` mock.
 
 ## Current Status
 
-**Active milestone:** Milestone 2 - HTTP policy and robots. The checkpoint comes first: the robots decision table and the politeness cases in the learning log, before any implementation.
+**Active milestone:** Milestone 2 - HTTP policy and robots. The checkpoint is approved. Implementation has not started.
 
 **Known behavior of the code today:**
 
 - `[x]` A frontier crawl, config validation, a custom robots parser, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 147 tests.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 154 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
 - `[x]` `npm start` from `backend/` runs `src/main.js`.
@@ -415,7 +428,7 @@ Integration tests use a real server, not a `fetch` mock.
 - `[x]` The canonical key keeps scheme, port, and query. Link extraction reads the raw `href` and resolves it with `new URL` against the document base.
 - `[x]` Scope is the start origin. Redirects are hop-by-hop. An off-origin hop is not requested.
 - `[x]` The engine returns `CrawlResult` and `PageResult`. Non-HTML is `skipped` / `non-html`. A missing `Content-Type` is non-HTML. Unread bodies are cancelled.
-- `[!]` Page fetches send a User-Agent and do not follow redirects. They still have no timeout and no size cap. An invalid start URL is a `ConfigError` before any fetch.
+- `[x]` Each page attempt has a timeout and a streaming byte limit. A hung response is `failed` / `timeout`. An oversized body is `failed` / `too-large`. Redirects are still manual. An invalid start URL is a `ConfigError` before any fetch.
 - `[!]` The worker calls an allow-all robots stand-in. `robots-parser` is installed and unused. The custom parser does not decide whether a path is allowed.
 - `[!]` `printReport` still writes a CSV onto a guessed Desktop path, including a Windows path when run from WSL. The macOS branch is unreachable. `npm start` no longer calls it. `sortPages` still sorts by hit count.
 - `[x]` Node is pinned to 24, and ESLint checks `backend/`.
@@ -487,18 +500,30 @@ Fixture tests:
 
 **Goal:** A rude or stuck network cannot define the crawl.
 
-Checkpoint first: the agent writes the robots decision table and the politeness cases in the learning log, then stops for author review.
+Checkpoint approved 2026-10-10. The decision table and politeness cases in the learning log stand, as corrected in Cemented Behavior. Implementation may start.
 
-- `[ ]` Add the per-attempt timeout and the streaming byte limit to the HTTP client.
+- `[x]` Add the per-attempt timeout and the streaming byte limit to the HTTP client. Count decoded bytes as they arrive. Do not load the whole body and measure it afterwards.
 - `[ ]` Map network errors to the error taxonomy through `cause.code`. Unit-test each kind with an injected `fetchImpl`.
-- `[ ]` Retry only the cemented cases, with the cemented backoff and `Retry-After` rule, through the injected clock.
-- `[ ]` Build the robots manager on `robots-parser` with the single-flight cache, the status rules, fail-closed behavior, the product-token match, and capped crawl-delay. Check every redirect hop.
-- `[ ]` Implement the politeness gate: per-origin FIFO leases, `nextAllowedAt` set before waiting, the gap on every attempt, crawl-delay override, and `waitedMs`.
-- `[ ]` Unit-test the gate and the retry delays with a fake clock.
-- `[ ]` Delete the custom robots parser after the new tests cover the decision table. In the same change, retire [backend/tests/robots.test.js](backend/tests/robots.test.js). It locks behavior this plan forbids: `403` and network errors return an empty file, which allows crawling where the plan fails closed. It also locks a one-hour cache TTL, the `MyCrawlerBot` user agent, and a direct global `fetch`.
-- `[ ]` Extend the fixture with a disallowed path, a redirect into a disallowed path, a missing `robots.txt`, a `robots.txt` that returns `500`, a slow response that hits the timeout, an oversized body, a `503` that succeeds on retry, a `429` with `Retry-After`, and a same-origin run that records peak concurrency.
+- `[ ]` Retry only the cemented cases, with backoff before `beforeAttempt`, the `Retry-After` rule, and the injected clock. Race retry sleeps against the fatal-stop abort. Do not abort the `fetch`.
+- `[ ]` Replace the robots stand-in with a manager on `robots-parser`. Single-flight cache, status table, fail-closed, product-token match, manager-owned robots redirect loop, lease reuse. `check(url, { beforeAttempt })` stays at worker step 4 and on every page redirect hop.
+- `[ ]` Implement the politeness gate: per-origin FIFO leases, `nextAllowedAt` set before waiting, gap on every attempt, crawl-delay from the robots manager after a successful parse, `waitedMs` as specified.
+- `[ ]` Unit-test the gate and the retry delays with a fake clock, including the case where backoff already passed the gap.
+- `[ ]` Delete `backend/src/crawler/robots.js` and `backend/tests/robots.test.js` in the same change.
+- `[ ]` Fixture and injected-client tests:
+  - disallowed path is never requested
+  - redirect into a disallowed path is never requested
+  - missing `robots.txt` (404) allows the origin
+  - `robots.txt` 500, after retries, skips the origin as `robots-unavailable`
+  - two workers share one `robots.txt` fetch
+  - `perOriginLimit: 1` plus a robots fetch does not deadlock
+  - slow body hits `timeoutMs` and becomes `failed` / `timeout`
+  - oversized body becomes `failed` / `too-large`
+  - `503` succeeds on retry; `429` with `Retry-After` waits that long unless it exceeds 5000 ms
+  - same-origin peak concurrency never exceeds `perOriginLimit`
+  - consecutive request starts to one origin, including `robots.txt`, are at least `minIntervalMs` apart
+  - `respectRobots: false` fetches a disallowed path and leaves crawl-delay unused
 
-**Done when:** a disallowed path is never requested, including through a redirect. A timeout becomes a failed `PageResult` rather than a hung process. A same-origin run never has more than `perOriginLimit` requests in flight. Consecutive request starts to one origin are at least `minIntervalMs` apart in the fixture log.
+**Done when:** a disallowed path is never requested, including through a redirect. A timeout becomes a failed `PageResult` rather than a hung process. `perOriginLimit: 1` still completes a crawl that must fetch `robots.txt`. A same-origin run never has more than `perOriginLimit` requests in flight. Consecutive request starts to one origin are at least `minIntervalMs` apart in the fixture log. `npm run verify` is green and the custom parser is gone.
 
 ### Milestone 3 - CLI and reports
 
@@ -763,7 +788,116 @@ The same example shows termination. After `S` is taken, the queue is empty and `
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 147 tests.
 - **Lesson learned:** The link filter and the key are two steps. Swallowing the second step hides a bug in the first.
 
+### 2026-10-10 - Milestone 2 checkpoint
+
+Approved: 2026-10-10, with the corrections written into Cemented Behavior in the same day's review. Implementation may start. This entry does not add a robots manager, a real politeness gate, a timeout, or a retry.
+
+The call site does not move. A worker still acquires one lease, then checks robots, then fetches. Milestone 2 replaces the allow-all stand-in and the immediate gate. `robots-parser` makes the allow and crawl-delay decision. This crawler does not implement a second matcher.
+
+#### Robots decision table
+
+The file is `${origin}/robots.txt`. The product token is the configured `userAgent` up to, but not including, the first `/` or space. The default token is `WebcrawlerBot`. That token is what the library receives. The library matches it without case sensitivity. A group for that token does not inherit `User-agent: *`. A `*` group applies only when the token has no group of its own. `Sitemap` and `Host` are ignored.
+
+One example file:
+
+```text
+User-agent: *
+Disallow: /private
+
+User-agent: WebcrawlerBot
+Allow: /secret/public
+Disallow: /secret
+Crawl-delay: 2
+```
+
+For `WebcrawlerBot`, the library's answers are the ones this crawl will use:
+
+| Path | Allowed | Why |
+|---|---|---|
+| `/secret` | no | The token's group disallows that prefix. |
+| `/secret/public` | yes | The allow rule is the longer match. |
+| `/private` | yes | `/private` is only in the `*` group, and this token has its own group. |
+| `/` | yes | Nothing in the token's group disallows it. |
+
+`Crawl-delay` for that token is 2 seconds. An empty 2xx body allows every path and has no crawl-delay. `User-agent: *` plus `Disallow: /` disallows `/` for this token, because the token has no group of its own.
+
+What the fetch of `robots.txt` does to the origin:
+
+| Result of the robots fetch | Pages on that origin | Robots summary | Is the page requested? |
+|---|---|---|---|
+| 2xx, and the path is allowed | The page is fetched. | `outcome: "parsed"`, `errorKind: null`, status of that 2xx. | Yes. |
+| 2xx, and the path is disallowed | This record is `skipped` / `robots`. No links. | `outcome: "parsed"`, `errorKind: null`. | No. |
+| 404, or any other 4xx except 429 | The origin is allowed. There is no crawl-delay. | `outcome: "allow-all"`, `errorKind: null`, that status. | Yes. |
+| 429 or 5xx, after the HTTP client's retries are finished | This record and every later record on this origin are `skipped` / `robots-unavailable`. No links. Records already fetched stay as they are. | `outcome: "unavailable"`, `errorKind: "http-status"`, that status. | No. |
+| Network failure, timeout, or `too-large`, after retries | Same skip as a 429. | `outcome: "unavailable"`, `errorKind` is the `FetchError` kind (`dns`, `connect`, `reset`, `tls`, `timeout`, `too-large`). `statusCode: null`. | No. |
+| The robots redirect loop fails | Same skip as a 429. | `outcome: "unavailable"`, `errorKind` is `bad-redirect`, `redirect-loop`, or `redirect-limit`. | No. |
+| `respectRobots: false` | Pages are fetched. Crawl-delay is not applied. | One entry, `outcome: "not-checked"`. Nothing is fetched. | Yes. |
+
+A skipped robots record was already reserved, so it still counts toward `maxPages`. Its `attempts`, `waitedMs`, and `errorKind` stay at the empty values. The cause lives on the robots summary, not on the page.
+
+`robots.txt` redirects are not page redirects. The manager follows at most 5 hops and may leave the host. A 6th hop, a repeated hop, a missing or unparseable `Location`, a `Location` with userinfo, or a non-`http(s)` location is a redirect failure. The cache key stays the origin that was asked. The final host is not crawled.
+
+The cache stores the in-flight promise. Two workers that need the same origin share one fetch. There is no TTL. The fetch uses the 512000-byte limit, which is the plan's 500 KiB, and the same retry rules as a page. It is not a `PageResult`, it is not inserted into `seen`, and it does not consume `maxPages`.
+
+The worker fetches that file with the one lease it already holds. It does not acquire a second lease. A second lease would deadlock when `perOriginLimit` is 1. Each robots attempt, including a redirect hop, calls that lease's `beforeAttempt`. That call enforces the gap and does not set the page's `waitedMs`. `waitedMs`, `durationMs`, and `attempts` on the page count only the page's own attempts. A record skipped before its own request keeps `waitedMs` null.
+
+A redirect hop of a page is checked with the same function before it is requested. A disallowed hop is `skipped` / `robots` on the original record. An unavailable file is `skipped` / `robots-unavailable`. The hop URL is not requested.
+
+#### Politeness cases
+
+`concurrency` is the only global cap, because it is the number of workers. `perOriginLimit` is a FIFO of leases for one origin. The gap is separate from the lease. `beforeAttempt` computes `startAt = max(now, nextAllowedAt)`, sets `nextAllowedAt = startAt + gap` before it waits, then waits through the clock.
+
+Crawl-delay from a parsed file is in seconds. Converted to milliseconds, it replaces `minIntervalMs` only when it is larger. It is then capped at 10000. A missing crawl-delay, a smaller crawl-delay, `allow-all`, `unavailable`, and `not-checked` all leave the gap at `minIntervalMs`.
+
+Case 1, global cap. `concurrency` is 2 and `perOriginLimit` is 5, with two origins that both have work. The fixture's peak is 2. The origin cap never creates a third in-flight request.
+
+Case 2, per-origin cap. One origin, `concurrency` 3, `perOriginLimit` 2, `minIntervalMs` 0, robots already known. Workers take A, B, then C. A and B hold the two leases. C waits in that origin's FIFO. When A releases, C is the next to acquire. Nobody polls.
+
+Case 3, minimum gap. Same origin, `perOriginLimit` 2, `minIntervalMs` 200, no crawl-delay. A and B both hold leases. A's `beforeAttempt` at t=0 sets `nextAllowedAt` to 200 and starts. B's `beforeAttempt` at t=0 sees 200, sets `nextAllowedAt` to 400, and starts at t=200. A finishes at t=250 and C acquires the free lease, but C's attempt starts at t=400, not at t=250. Holding a lease is not permission to start early.
+
+Case 4, crawl-delay. The example file's delay is 2 seconds. `minIntervalMs` is 200, so the gap becomes 2000. A delay of 30 seconds becomes 10000. A delay of 0.1 seconds is 100 ms, which is not larger than 200, so the gap stays 200.
+
+Case 5, retry gap. `retryCount` is 2 extra attempts, so three attempts at most. The delay before retry `n`, with `n` starting at 1, is `min(5000, retryBaseDelayMs * 2^(n-1))`. With the default base of 500, the waits are 500 then 1000. The client sleeps that backoff first, then calls `beforeAttempt`, then starts the attempt. The worker keeps its lease during the sleep.
+
+One origin, one worker, `minIntervalMs` 200. Attempt 1 starts at t=0 and sets `nextAllowedAt` to 200. It times out at t=10. The backoff ends at t=510. `beforeAttempt` sees `max(510, 200)`, starts at t=510, and sets `nextAllowedAt` to 710. The gap does not add another 200 on top of a backoff that already passed it.
+
+On `429` or `503`, a `Retry-After` can raise that wait. A non-negative integer is seconds. Anything else is read as an HTTP date minus `now`, and a date in the past means 0. The wait is the greater of the backoff and that value. If the greater value is above 5000, the client does not retry and returns that response. A value that is neither an integer nor a date is ignored, and the backoff stands. Redirects, `dns`, `tls`, `too-large`, and every status outside the retry list are not retried. A status is never thrown. After the last attempt, a 4xx or 5xx is returned and the page becomes `failed` / `http-status`.
+
+Fatal-stop ends a politeness sleep and a retry sleep early. It does not throw a second error. The worker then finishes the item it already holds and commits it. A worker blocked in `acquire` is released when the holder hits `finally` and releases the lease, so it does not sit in the FIFO forever. SIGINT does not cancel those sleeps. In-flight work on interrupt keeps the gap and the backoff, then commits under the stopping rule.
+
+#### Corrections accepted at approval
+
+These replace the looser readings from the first draft of this checkpoint.
+
+1. `robots.txt` uses the worker's current lease and never takes a second one. `perOriginLimit: 1` must still make progress.
+2. 500 KiB is 512000 bytes.
+3. A robots redirect may change host. A non-`http(s)` hop is a robots redirect failure (`unavailable`), not a page `redirect-off-origin`. The summary stays under the origin that was asked.
+4. A final status that is not 2xx, not 4xx, and not a hop this loop follows is `unavailable`. `429` is the only 4xx that fail-closes.
+5. The page's `waitedMs` starts at `take()` and ends at that page's own first `beforeAttempt`. The `robots.txt` attempt does not set it. A skip before the page request keeps it null.
+6. Backoff is awaited before `beforeAttempt`. `Retry-After` raises the wait and never lowers it. Above 5000 ms, do not retry.
+7. Fatal-stop races `clock.sleep` against an internal abort and does not abort `fetch`. SIGINT does not trip that abort.
+8. Only the worker that starts the shared `robots.txt` fetch calls `beforeAttempt` for it. Waiters do not. Otherwise two leases would consume two gaps for one file.
+9. Crawl-delay is applied only after a successful parse. The `robots.txt` fetch itself uses `minIntervalMs`.
+
+### 2026-10-10 - HTTP timeout and byte limit
+
+- **Problem:** A page fetch could wait forever, and a body was loaded completely before its size was known.
+- **Chosen solution:** Each attempt uses `AbortSignal.timeout`. The client reads the body with `TextDecoder` and counts decoded bytes as chunks arrive. A `Content-Length` above `maxBytes` fails `too-large` without reading. A timeout is `failed` / `timeout` on the page. Retries, robots, and the politeness gate are unchanged.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 154 tests. A hung fixture response becomes one failed page. A declared body over the limit is `too-large`.
+- **Lesson learned:** The timeout has to cover the body read, not only the headers. Cancelling a stream after the limit is what keeps the connection from staying open.
+
 ## Change Log
+
+### 2026-10-10 (HTTP timeout and byte limit)
+
+- Added a per-attempt timeout and a streaming byte limit to the HTTP client.
+- A slow page is `failed` / `timeout`. An oversized body is `failed` / `too-large` and is not fully read.
+
+### 2026-10-10 (Milestone 2 checkpoint)
+
+- Wrote the robots decision table and the politeness cases. Approved the same day after review.
+- Cemented: lease reuse, 512000-byte robots cap, manager-owned robots redirects, odd status → `unavailable`, `waitedMs` on the page attempt only, backoff before `beforeAttempt`, fatal-stop cancels sleeps but not `fetch`, single-flight `beforeAttempt` ownership, crawl-delay only after parse.
+- At this checkpoint, implementation of timeout, retries, robots, and politeness had not started.
 
 ### 2026-10-10 (Milestone 1 cleanup)
 
