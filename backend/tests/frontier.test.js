@@ -390,6 +390,7 @@ test("an interrupt does not cut a retry sleep short", async () => {
       concurrency: 1,
       maxPages: 1,
       maxDepth: 0,
+      minIntervalMs: 0,
       retryCount: 1,
       retryBaseDelayMs: 500,
     },

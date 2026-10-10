@@ -44,12 +44,12 @@ async function fetchRecord(item, lease, http, robots, frontier, clock, startOrig
       response = await http.get(currentUrl, {
         maxBytes: config.maxResponseBytes,
         async beforeAttempt() {
+          await lease.beforeAttempt();
           if (!notedWait) {
             page.waitedMs = clock.now() - item.takenAt;
             notedWait = true;
             startedAt = clock.now();
           }
-          await lease.beforeAttempt();
         },
         wantBody({ statusCode, contentType }) {
           return statusCode >= 200 && statusCode < 300 && isHtml(contentType);
@@ -217,11 +217,17 @@ async function crawl(configInput, dependencies = {}) {
     retryBaseDelayMs: config.retryBaseDelayMs,
     fatalSignal: fatalControl.signal,
   });
-  const gate = createPolitenessGate();
   const robots = createRobotsManager({
     http,
     userAgent: config.userAgent,
     respectRobots: config.respectRobots,
+  });
+  const gate = createPolitenessGate({
+    clock,
+    perOriginLimit: config.perOriginLimit,
+    minIntervalMs: config.minIntervalMs,
+    robots,
+    fatalSignal: fatalControl.signal,
   });
   const frontier = createFrontier({
     config,

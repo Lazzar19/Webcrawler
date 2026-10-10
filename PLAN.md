@@ -412,12 +412,12 @@ Integration tests use a real server, not a `fetch` mock.
 
 ## Current Status
 
-**Active milestone:** Milestone 2 - HTTP policy and robots. The checkpoint is approved. Timeout, the byte limit, network kinds, retries, and the robots manager are in place. The politeness gate is still a stand-in.
+**Active milestone:** Milestone 2 - HTTP policy and robots. The checkpoint is approved. Timeout, the byte limit, network kinds, retries, the robots manager, and the politeness gate are in place. Fixture checks for pace and concurrency are still open.
 
 **Known behavior of the code today:**
 
 - `[x]` A frontier crawl, config validation, a robots manager on `robots-parser`, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 185 tests.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 196 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
 - `[x]` `npm start` from `backend/` runs `src/main.js`.
@@ -430,7 +430,8 @@ Integration tests use a real server, not a `fetch` mock.
 - `[x]` The engine returns `CrawlResult` and `PageResult`. Non-HTML is `skipped` / `non-html`. A missing `Content-Type` is non-HTML. Unread bodies are cancelled.
 - `[x]` Each page attempt has a timeout and a streaming byte limit. A hung response is `failed` / `timeout`. An oversized body is `failed` / `too-large`. Redirects are still manual. An invalid start URL is a `ConfigError` before any fetch.
 - `[x]` Retries stay inside the HTTP client. `timeout`, `connect`, `reset`, and `429`/`500`/`502`/`503`/`504` retry. `dns`, `tls`, `too-large`, redirects, and every other status do not. Backoff runs through the clock before `beforeAttempt`. `Retry-After` on `429` or `503` can only raise that wait, and a wait above 5000 ms returns the response. Fatal-stop ends the sleep and does not abort `fetch`.
-- `[x]` `robots-parser` decides allow and crawl-delay. One `robots.txt` fetch is shared per origin, on the worker's existing lease. A disallowed path is `skipped` / `robots` and is not requested. An unavailable file is `skipped` / `robots-unavailable`. The custom parser is gone. The politeness gate does not apply the crawl-delay yet.
+- `[x]` `robots-parser` decides allow and crawl-delay. One `robots.txt` fetch is shared per origin, on the worker's existing lease. A disallowed path is `skipped` / `robots` and is not requested. An unavailable file is `skipped` / `robots-unavailable`. The custom parser is gone.
+- `[x]` The politeness gate is a per-origin FIFO of leases. `beforeAttempt` claims `nextAllowedAt` before it waits. The gap is `minIntervalMs` until a parsed crawl-delay is larger, then that delay, capped at 10 seconds. `waitedMs` runs from `take()` through that page's own gap. Fatal-stop ends the wait and does not release a held lease.
 - `[!]` `printReport` still writes a CSV onto a guessed Desktop path, including a Windows path when run from WSL. The macOS branch is unreachable. `npm start` no longer calls it. `sortPages` still sorts by hit count.
 - `[x]` Node is pinned to 24, and ESLint checks `backend/`.
 
@@ -507,8 +508,8 @@ Checkpoint approved 2026-10-10. The decision table and politeness cases in the l
 - `[x]` Map network errors to the error taxonomy through `cause.code`. Unit-test each kind with an injected `fetchImpl`.
 - `[x]` Retry only the cemented cases, with backoff before `beforeAttempt`, the `Retry-After` rule, and the injected clock. Race retry sleeps against the fatal-stop abort. Do not abort the `fetch`.
 - `[x]` Replace the robots stand-in with a manager on `robots-parser`. Single-flight cache, status table, fail-closed, product-token match, manager-owned robots redirect loop, lease reuse. `check(url, { beforeAttempt })` stays at worker step 4 and on every page redirect hop.
-- `[ ]` Implement the politeness gate: per-origin FIFO leases, `nextAllowedAt` set before waiting, gap on every attempt, crawl-delay from the robots manager after a successful parse, `waitedMs` as specified.
-- `[ ]` Unit-test the gate and the retry delays with a fake clock, including the case where backoff already passed the gap.
+- `[x]` Implement the politeness gate: per-origin FIFO leases, `nextAllowedAt` set before waiting, gap on every attempt, crawl-delay from the robots manager after a successful parse, `waitedMs` as specified.
+- `[x]` Unit-test the gate and the retry delays with a fake clock, including the case where backoff already passed the gap.
 - `[x]` Delete `backend/src/crawler/robots.js` and `backend/tests/robots.test.js` in the same change.
 - `[ ]` Fixture and injected-client tests:
   - disallowed path is never requested
@@ -908,7 +909,18 @@ These replace the looser readings from the first draft of this checkpoint.
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 185 tests. The example file, the status table, a shared fetch, a redirect off-host, and a disallowed path that is never requested are covered. The Jest open-handle warning from the old parser's timer is gone.
 - **Lesson learned:** `robots.txt` is not a page. Giving it a second lease deadlocks when `perOriginLimit` is 1, so the fetch has to ride the lease the worker already holds.
 
+### 2026-10-10 - Politeness gate
+
+- **Problem:** Every worker could start a request as soon as it held an item. `perOriginLimit`, `minIntervalMs`, and crawl-delay were configuration that the crawl ignored.
+- **Chosen solution:** One FIFO of leases per origin. `beforeAttempt` asks the robots manager for the current gap, sets `nextAllowedAt` before waiting, and sleeps on the injected clock. The `robots.txt` fetch still uses `minIntervalMs`. After a parsed crawl-delay, the page that triggered the fetch waits that delay when it is larger, capped at 10 seconds. `waitedMs` is from `take()` to the end of that page's own first gap. Fatal-stop resolves the sleep and does not wake a worker blocked in `acquire`. A backoff that has already passed `nextAllowedAt` does not add another full gap.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 196 tests. A fake clock covers the FIFO, the claimed start time, crawl-delay, and both backoff cases. `perOriginLimit: 1` completes a crawl that fetches `robots.txt`.
+- **Lesson learned:** The gap and the lease are different waits. Holding a lease is not permission to start early, and crawl-delay cannot be known until the file has been parsed.
+
 ## Change Log
+
+### 2026-10-10 (Politeness gate)
+
+- Added per-origin FIFO leases and a gap on every attempt. Crawl-delay applies after `robots.txt` is parsed. A backoff that already passed the gap does not add another one.
 
 ### 2026-10-10 (Robots manager)
 
