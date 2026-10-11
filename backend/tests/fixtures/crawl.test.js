@@ -2,7 +2,12 @@ const { crawl } = require("../../src/crawler/crawl");
 const { DEFAULTS } = require("../../src/crawler/crawl-config");
 const { createFixtureServer } = require("./server");
 
-const clock = { now: () => 1_700_000_000_000 };
+const clock = {
+  now: () => 1_700_000_000_000,
+  sleep() {
+    return Promise.resolve();
+  },
+};
 
 function html(body) {
   return (_req, res) => {
@@ -521,6 +526,8 @@ describe("fixture crawl", () => {
         expect(result.pages).toHaveLength(1);
         expect(result.pages[0].state).toBe("failed");
         expect(result.pages[0].errorKind).toBe("timeout");
+        expect(result.pages[0].statusCode).toBe(200);
+        expect(result.pages[0].contentType).toBe("text/html; charset=utf-8");
         expect(result.counts.failed).toBe(1);
       }
     );
@@ -551,6 +558,8 @@ describe("fixture crawl", () => {
         );
         expect(result.pages[0].state).toBe("failed");
         expect(result.pages[0].errorKind).toBe("too-large");
+        expect(result.pages[0].statusCode).toBe(200);
+        expect(result.pages[0].contentType).toBe("text/html; charset=utf-8");
       }
     );
   });

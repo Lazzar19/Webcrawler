@@ -1,6 +1,11 @@
 const { createHttpClient } = require("../src/crawler/http-client");
 
-const clock = { now: () => 1_700_000_000_000 };
+const clock = {
+  now: () => 1_700_000_000_000,
+  sleep() {
+    return Promise.resolve();
+  },
+};
 
 function client(fetchImpl, timeoutMs = 1000) {
   return createHttpClient({
@@ -157,6 +162,86 @@ test("a body within the limit is returned with its decoded length", async () => 
   expect(response.body).toBe("<html>ok</html>");
   expect(response.byteLength).toBe(Buffer.byteLength("<html>ok</html>"));
   expect(response.attempts).toBe(1);
+});
+
+test("wantBody is called for a non-2xx status before the body is cancelled", async () => {
+  let seen = null;
+  let cancelled = false;
+  const http = client(async () => {
+    const body = new ReadableStream({
+      pull(controller) {
+        controller.enqueue(new TextEncoder().encode("no"));
+        controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    return new Response(body, {
+      status: 404,
+      headers: { "content-type": "text/html" },
+    });
+  });
+
+  const response = await http.get("https://example.com/", {
+    maxBytes: 1000,
+    async beforeAttempt() {},
+    wantBody(headers) {
+      seen = headers;
+      return true;
+    },
+  });
+  expect(seen).toEqual({ statusCode: 404, contentType: "text/html" });
+  expect(response.body).toBeNull();
+  expect(cancelled).toBe(true);
+});
+
+test("a cancel rejection does not hide a Content-Length too-large failure", async () => {
+  const http = client(async () => responseFrom({
+    status: 200,
+    headers: {
+      "content-type": "text/html",
+      "content-length": "1000",
+    },
+    body: {
+      getReader() {
+        throw new Error("body was read");
+      },
+      cancel() {
+        return Promise.reject(new Error("cancel failed"));
+      },
+    },
+  }));
+
+  const pending = http.get("https://example.com/", htmlOptions(10));
+  await expect(pending).rejects.toMatchObject({
+    kind: "too-large",
+    statusCode: 200,
+    contentType: "text/html",
+    attempts: 1,
+  });
+});
+
+test("too-large after headers keeps the response status and content type", async () => {
+  const http = client(async () => responseFrom({
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "content-length": "1000",
+    },
+    body: {
+      getReader() {
+        throw new Error("body was read");
+      },
+      async cancel() {},
+    },
+  }));
+
+  const pending = http.get("https://example.com/", htmlOptions(10));
+  await expect(pending).rejects.toMatchObject({
+    kind: "too-large",
+    statusCode: 200,
+    contentType: "text/html; charset=utf-8",
+  });
 });
 
 test("a non-html response cancels the body", async () => {

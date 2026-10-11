@@ -152,10 +152,13 @@ function createRobotsManager({ http, userAgent, respectRobots }) {
         return { allowed: true };
       }
 
-      const pending = cache.has(origin)
-        ? cache.get(origin)
-        : start(origin, beforeAttempt ?? (async () => {}));
-      const record = await pending;
+      if (!cache.has(origin)) {
+        if (typeof beforeAttempt !== "function") {
+          throw new Error("robots.check requires beforeAttempt to start a fetch");
+        }
+        start(origin, beforeAttempt);
+      }
+      const record = await cache.get(origin);
       if (record.outcome === "unavailable") {
         return { allowed: false, reason: "robots-unavailable" };
       }

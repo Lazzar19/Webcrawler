@@ -1,11 +1,13 @@
 const ACCEPT = "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1";
 
 class FetchError extends Error {
-  constructor(kind, message, attempts) {
+  constructor(kind, message, attempts, headers = {}) {
     super(message);
     this.name = "FetchError";
     this.kind = kind;
     this.attempts = attempts;
+    this.statusCode = headers.statusCode ?? null;
+    this.contentType = headers.contentType ?? null;
   }
 }
 
@@ -39,7 +41,7 @@ function errorMessage(error) {
 
 async function cancelBody(response) {
   if (response.body) {
-    await response.body.cancel();
+    await response.body.cancel().catch(() => {});
   }
 }
 
@@ -50,7 +52,7 @@ async function readDecoded(response, maxBytes, signal) {
   let byteLength = 0;
 
   const failOversized = async () => {
-    await reader.cancel();
+    await reader.cancel().catch(() => {});
     throw new FetchError("too-large", `response exceeds ${maxBytes} bytes`, 1);
   };
 
@@ -147,7 +149,7 @@ function createHttpClient({
   fatalSignal,
 } = {}) {
   const fetchFn = fetchImpl ?? fetch;
-  const now = () => (clock ? clock.now() : Date.now());
+  const now = () => clock.now();
 
   return {
     async get(url, { maxBytes, beforeAttempt, wantBody }) {
@@ -179,6 +181,8 @@ function createHttpClient({
         }
         attempts += 1;
         const signal = AbortSignal.timeout(timeoutMs);
+        let headerStatus = null;
+        let headerContentType = null;
         try {
           const response = await fetchFn(url, {
             redirect: "manual",
@@ -190,9 +194,12 @@ function createHttpClient({
           });
           const statusCode = response.status;
           const contentType = response.headers.get("content-type");
+          headerStatus = statusCode;
+          headerContentType = contentType;
           const location = response.headers.get("location");
           const retryAfter = response.headers.get("retry-after");
-          const readBody = statusCode >= 200 && statusCode < 300 && wantBody({ statusCode, contentType });
+          const keep = wantBody({ statusCode, contentType });
+          const readBody = keep && statusCode >= 200 && statusCode < 300;
           let body = null;
           let byteLength = null;
           if (!readBody) {
@@ -201,7 +208,10 @@ function createHttpClient({
             const declared = Number(response.headers.get("content-length"));
             if (Number.isFinite(declared) && declared > maxBytes) {
               await cancelBody(response);
-              throw new FetchError("too-large", `response exceeds ${maxBytes} bytes`, attempts);
+              throw new FetchError("too-large", `response exceeds ${maxBytes} bytes`, attempts, {
+                statusCode,
+                contentType,
+              });
             }
             if (response.body) {
               const read = await readDecoded(response, maxBytes, signal);
@@ -231,10 +241,15 @@ function createHttpClient({
           pendingResult = result;
         } catch (error) {
           const cause = signal.aborted && signal.reason instanceof Error ? signal.reason : error;
+          const headers = { statusCode: headerStatus, contentType: headerContentType };
           const failure = error instanceof FetchError
             ? error
-            : new FetchError(kindFromCause(cause), errorMessage(cause), attempts);
+            : new FetchError(kindFromCause(cause), errorMessage(cause), attempts, headers);
           failure.attempts = attempts;
+          if (failure.statusCode == null && headerStatus != null) {
+            failure.statusCode = headerStatus;
+            failure.contentType = headerContentType;
+          }
           if (!RETRYABLE_KINDS.has(failure.kind) || attempts >= maxAttempts) {
             throw failure;
           }

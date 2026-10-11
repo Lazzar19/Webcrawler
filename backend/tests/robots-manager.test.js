@@ -48,6 +48,13 @@ function managerFor(fetchImpl, { userAgent = "WebcrawlerBot/1.0", respectRobots 
   };
 }
 
+test("starting a robots fetch without beforeAttempt throws", async () => {
+  const { robots } = managerFor(replyArguments(""));
+  await expect(robots.check("https://example.com/")).rejects.toThrow(
+    /beforeAttempt/,
+  );
+});
+
 test("the product token stops at the first slash or space", () => {
   expect(productToken("WebcrawlerBot/1.0 (+https://github.com/Lazzar19/webcrawler)")).toBe("WebcrawlerBot");
   expect(productToken("Other Bot/1.0")).toBe("Other");

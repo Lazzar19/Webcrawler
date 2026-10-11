@@ -58,6 +58,12 @@ async function fetchRecord(item, lease, http, robots, frontier, clock, startOrig
     } catch (error) {
       if (error instanceof FetchError) {
         page.attempts += error.attempts;
+        if (error.statusCode != null) {
+          page.statusCode = error.statusCode;
+        }
+        if (error.contentType != null) {
+          page.contentType = error.contentType;
+        }
         if (startedAt !== null) {
           page.durationMs = clock.now() - startedAt;
         }
