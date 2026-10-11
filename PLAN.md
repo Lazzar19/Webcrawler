@@ -161,6 +161,29 @@ Fixed constants, not configuration: retry delay cap 5000 ms, crawl-delay cap 10 
 
 `startUrl` is a required config field with no default. Config validation rejects it unless it parses, its scheme is `http` or `https`, and it has no username or password. This check runs inside config creation, before `crawl()` reserves anything, so `canonicalKey` never sees an invalid start URL even when `crawl()` is called from code instead of the CLI.
 
+### CLI arguments
+
+`parseArgs` from `node:util` reads the arguments after the script name. It does not crawl and it does not coerce numbers. A missing flag is omitted, so the default in Defaults still applies. A present numeric flag stays the characters the user typed, including `0`.
+
+| Argument | Result |
+|---|---|
+| one positional | `startUrl` |
+| `--depth` | `maxDepth` |
+| `--max-pages` | `maxPages` |
+| `--concurrency` | `concurrency` |
+| `--per-origin` | `perOriginLimit` |
+| `--min-interval` | `minIntervalMs` |
+| `--timeout` | `timeoutMs` |
+| `--user-agent` | `userAgent` |
+| `--no-respect-robots` | `respectRobots: false` |
+| `--format` | reporter format, not a config field |
+| `--output` | file path, not a config field |
+
+- `--no-respect-robots` takes no value. When it is absent, `respectRobots` is omitted and the default stays `true`.
+- Zero positionals leaves `startUrl` empty for the validation step. A second positional is a `ConfigError`.
+- An unknown flag, or a flag that requires a value and has none, is a `ConfigError`. The parser does not accept a second name for the same option.
+- Validation reads that result and calls `createCrawlConfig`. A numeric flag must be one or more digits. `0` becomes the number 0 and is passed in, so the default does not replace it. Any other spelling is a `ConfigError`. `createCrawlConfig` then applies the URL rule and the positive or non-negative rule. `--format` and `--output` stay beside the config and are not checked here.
+
 An omitted field other than `startUrl` gets the default above. An unknown config key is a configuration error, so a typo cannot silently fall back to a default. Validation: `maxDepth` and `retryCount` and `minIntervalMs` and `retryBaseDelayMs` are non-negative integers. `maxPages`, `concurrency`, `perOriginLimit`, `timeoutMs`, and `maxResponseBytes` are positive integers. `respectRobots` is a boolean. `userAgent` is a non-empty string.
 
 ### Workers and termination
@@ -439,15 +462,15 @@ Integration tests use a real server, not a `fetch` mock.
 
 ## Current Status
 
-**Active milestone:** Milestone 2 - HTTP policy and robots. The checklist is complete. Milestone 3 has not started.
+**Active milestone:** Milestone 3 - CLI and reports. URL and number validation is in place. Exit codes have not started.
 
 **Known behavior of the code today:**
 
 - `[x]` A frontier crawl, config validation, a robots manager on `robots-parser`, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 207 tests.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 234 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
-- `[x]` `npm start` from `backend/` runs `src/main.js`.
+- `[x]` `npm start` from `backend/` runs `src/main.js`. It still reads a positional depth and max pages. `createCliConfig` accepts the Milestone 3 flags, rejects a bad URL or number, and keeps an explicit `0`. It is not wired into `main.js` yet.
 - `[x]` The duplicate root crawler and the Vite starter are gone.
 - `[x]` `concurrency` is the worker count. `p-limit` is gone. A parent no longer holds a slot while waiting for children.
 - `[x]` `maxPages` counts fetch reservations. The default is `50`. `Infinity` is rejected.
@@ -459,7 +482,7 @@ Integration tests use a real server, not a `fetch` mock.
 - `[x]` Retries stay inside the HTTP client. `timeout`, `connect`, `reset`, and `429`/`500`/`502`/`503`/`504` retry. `dns`, `tls`, `too-large`, redirects, and every other status do not. Backoff runs through the clock before `beforeAttempt`. `Retry-After` on `429` or `503` can only raise that wait, and a wait above 5000 ms returns the response. Fatal-stop ends the sleep and does not abort `fetch`.
 - `[x]` `robots-parser` decides allow and crawl-delay. One `robots.txt` fetch is shared per origin, on the worker's existing lease. A disallowed path is `skipped` / `robots` and is not requested. An unavailable file is `skipped` / `robots-unavailable`. The custom parser is gone.
 - `[x]` The politeness gate is a per-origin FIFO of leases. `beforeAttempt` claims `nextAllowedAt` before it waits. The gap is `minIntervalMs` until a parsed crawl-delay is larger, then that delay, capped at 10 seconds. `waitedMs` runs from `take()` through that page's own gap. Fatal-stop ends the wait and does not release a held lease.
-- `[!]` `printReport` still writes a CSV onto a guessed Desktop path, including a Windows path when run from WSL. The macOS branch is unreachable. `npm start` does not call it. The terminal still prints one counts line. Replacing that with the console summary, and deleting the Desktop writer, is Milestone 3. It is not the next Milestone 2 item.
+- `[!]` `printReport` still writes a CSV onto a guessed Desktop path, including a Windows path when run from WSL. The macOS branch is unreachable. `npm start` does not call it. The terminal still prints one counts line. Replacing that with the console summary, and deleting the Desktop writer, is later in Milestone 3.
 - `[x]` Node is pinned to 24, and ESLint checks `backend/`.
 
 ## Milestones
@@ -560,8 +583,8 @@ The console summary in Output is not part of this milestone.
 
 **Goal:** The CLI is a thin adapter. Scripts can depend on the exit code and the JSON shape.
 
-- `[ ]` Parse with `node:util` `parseArgs`. Accept a positional URL plus `--depth`, `--max-pages`, `--concurrency`, `--per-origin`, `--min-interval`, `--timeout`, `--user-agent`, `--no-respect-robots`, `--format`, and `--output`.
-- `[ ]` Validate the URL and every number. Preserve an explicit `0` for depth. Unknown flags are errors.
+- `[x]` Parse with `node:util` `parseArgs`. Accept a positional URL plus `--depth`, `--max-pages`, `--concurrency`, `--per-origin`, `--min-interval`, `--timeout`, `--user-agent`, `--no-respect-robots`, `--format`, and `--output`.
+- `[x]` Validate the URL and every number. Preserve an explicit `0` for depth. Unknown flags are errors.
 - `[ ]` Use exit codes `0`, `1`, `2`, and `130` as specified above.
 - `[ ]` Emit the console summary from Output, plus JSON and CSV, from `CrawlResult`, following the one-artifact-on-stdout rule. CSV escapes commas, quotes, and newlines. The console text matches the sample, including a skipped page, a failed page, a redirect `final` suffix, and a robots line.
 - `[ ]` Write files only to `--output`. Delete `getDesktopPath`, `saveToCSV`, and `printReport` in that change. No guessed Desktop path remains.
@@ -952,7 +975,29 @@ These replace the looser readings from the first draft of this checkpoint.
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 207 tests. The spacing and `Retry-After` cases use a clock whose `sleep` advances `now`, and the fixture log reads that same clock.
 - **Lesson learned:** The server log is the proof of what was requested. A skipped page record is not enough, because the request can still have left the process.
 
+### 2026-10-11 - CLI arguments
+
+- **Problem:** `npm start` still reads a positional depth and max pages. The Milestone 3 flags were named, but nothing turned those names into fields, and `Number` would have turned an explicit `0` into a value that is easy to drop.
+- **Chosen solution:** `parseCliArgs` uses `node:util` `parseArgs`. One positional is `startUrl`. Each flag maps to the field in CLI arguments. Numeric flags stay strings. `--format` and `--output` stay off the config object. `--no-respect-robots` sets `respectRobots` to false only when present. A second positional, an unknown flag, or a missing flag value is a `ConfigError`. The function does not crawl, and `main.js` does not call it yet.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 220 tests. The new file locks `0` as the string `"0"`, the flag map, and the three argument errors.
+- **Lesson learned:** Parsing and validation are separate. The parser's job is to keep the characters the user typed. Turning `"0"` into a number, and rejecting a bad URL, is the next step.
+
+### 2026-10-11 - CLI validation
+
+- **Problem:** The parser kept `"0"` as text. A missing `--depth` and a typed `0` would look the same if that text were dropped, and a bad URL or a non-digit would not yet be a `ConfigError` from the CLI path.
+- **Chosen solution:** `createCliConfig` turns a digit string into a number and passes it to `createCrawlConfig`. `0` is passed in, so depth stays `0` and does not become the default `2`. A non-digit, a missing URL, a non-http URL, userinfo, and an unknown flag are `ConfigError`. `--format` and `--output` stay beside the frozen config. `main.js` still does not call this.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 234 tests. Explicit `0` stays `0` for depth and for `minIntervalMs`. `0` is rejected for the positive limits.
+- **Lesson learned:** The default applies only when the flag is absent. Once the characters are a number, `0` is a real setting.
+
 ## Change Log
+
+### 2026-10-11 (CLI validation)
+
+- `createCliConfig` checks the URL and each numeric flag. An explicit `0` stays `0`. Unknown flags stay errors. `main.js` still uses the old positional depth and max pages.
+
+### 2026-10-11 (CLI arguments)
+
+- `parseCliArgs` reads one positional URL and the Milestone 3 flags through `node:util` `parseArgs`. Numeric flags stay strings. `main.js` still uses the old positional depth and max pages.
 
 ### 2026-10-10 (Fixture policy)
 
