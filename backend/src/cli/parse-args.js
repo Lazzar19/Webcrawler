@@ -15,6 +15,8 @@ const OPTIONS = {
   "max-segment-repeats": { type: "string" },
   "user-agent": { type: "string" },
   "no-respect-robots": { type: "boolean" },
+  "no-dedupe-content": { type: "boolean" },
+  "no-canonical": { type: "boolean" },
   format: { type: "string" },
   output: { type: "string" },
   details: { type: "boolean" },
@@ -78,6 +80,12 @@ function parseCliArgs(argv) {
   }
   if (values["no-respect-robots"] === true) {
     options.respectRobots = false;
+  }
+  if (values["no-dedupe-content"] === true) {
+    options.dedupeContent = false;
+  }
+  if (values["no-canonical"] === true) {
+    options.respectCanonical = false;
   }
 
   return {

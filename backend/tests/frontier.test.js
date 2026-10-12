@@ -519,8 +519,8 @@ test("path depth counts an empty segment and ignores the query", async () => {
   const { http, result } = crawlSite(
     {
       "/": htmlResponse('<a href="/a/b"></a><a href="/a//b"></a><a href="/z?q=a/a/a/a"></a>'),
-      "/a/b": htmlResponse(""),
-      "/z": htmlResponse(""),
+      "/a/b": htmlResponse("<p>ab</p>"),
+      "/z": htmlResponse("<p>z</p>"),
     },
     { respectRobots: false, maxDepth: 1, maxPathDepth: 2 }
   );
@@ -543,8 +543,8 @@ test("the third copy of a segment is repeated-segment, and comparison is case-se
   const { http, result } = crawlSite(
     {
       "/": htmlResponse('<a href="/a/b/a"></a><a href="/a/a/a"></a><a href="/A/a/A"></a>'),
-      "/a/b/a": htmlResponse(""),
-      "/A/a/A": htmlResponse(""),
+      "/a/b/a": htmlResponse("<p>aba</p>"),
+      "/A/a/A": htmlResponse("<p>AaA</p>"),
     },
     { respectRobots: false, maxDepth: 1, maxSegmentRepeats: 2 }
   );

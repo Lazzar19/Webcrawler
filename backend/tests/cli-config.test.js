@@ -11,6 +11,8 @@ test("a missing numeric flag keeps the default", () => {
   expect(config.maxDurationMs).toBeNull();
   expect(config.maxTotalAttempts).toBeNull();
   expect(config.respectRobots).toBe(true);
+  expect(config.dedupeContent).toBe(true);
+  expect(config.respectCanonical).toBe(true);
   expect(Object.isFrozen(config)).toBe(true);
 });
 
@@ -132,6 +134,17 @@ test("--max-duration and --max-attempts become positive integers", () => {
   expect(config.maxUrlLength).toBe(DEFAULTS.maxUrlLength);
   expect(config.maxPathDepth).toBe(DEFAULTS.maxPathDepth);
   expect(config.maxSegmentRepeats).toBe(DEFAULTS.maxSegmentRepeats);
+});
+
+test("--no-dedupe-content and --no-canonical turn those defaults off", () => {
+  const { config } = createCliConfig([
+    startUrl,
+    "--no-dedupe-content",
+    "--no-canonical",
+  ]);
+
+  expect(config.dedupeContent).toBe(false);
+  expect(config.respectCanonical).toBe(false);
 });
 
 test("the trap flags become positive integers", () => {

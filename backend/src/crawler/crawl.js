@@ -1,3 +1,4 @@
+const { createHash } = require("node:crypto");
 const { createClock } = require("./clock");
 const { createLogger } = require("./logger");
 const { createCrawlConfig } = require("./crawl-config");
@@ -28,6 +29,10 @@ function failPage(page, errorKind, errorMessage) {
 function skipPage(page, skipReason) {
   page.state = "skipped";
   page.skipReason = skipReason;
+}
+
+function contentHash(body) {
+  return createHash("sha256").update(body, "utf8").digest("hex");
 }
 
 async function fetchRecord(item, lease, http, robots, frontier, clock, startOrigin, config, logger, trace) {
@@ -182,6 +187,9 @@ async function fetchRecord(item, lease, http, robots, frontier, clock, startOrig
 
     try {
       item.links = extractLinks(response.body, page.finalUrl, logger);
+      if (config.dedupeContent && typeof response.body === "string") {
+        item.contentHash = contentHash(response.body);
+      }
       emitTrace(trace, "links", {
         url: page.finalUrl,
         discovered: item.links.length,

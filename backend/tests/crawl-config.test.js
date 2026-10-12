@@ -199,3 +199,25 @@ describe("configuration validation", () => {
     });
   });
 });
+
+describe("content identity config", () => {
+  test("defaults both flags to true and accepts false", () => {
+    expect(DEFAULTS.dedupeContent).toBe(true);
+    expect(DEFAULTS.respectCanonical).toBe(true);
+    expect(createCrawlConfig({ startUrl }).dedupeContent).toBe(true);
+    expect(createCrawlConfig({ startUrl }).respectCanonical).toBe(true);
+
+    const config = createCrawlConfig({
+      startUrl,
+      dedupeContent: false,
+      respectCanonical: false,
+    });
+    expect(config.dedupeContent).toBe(false);
+    expect(config.respectCanonical).toBe(false);
+  });
+
+  test.each(["dedupeContent", "respectCanonical"])("rejects a non-boolean %s", (field) => {
+    expect(() => createCrawlConfig({ startUrl, [field]: "true" })).toThrow(ConfigError);
+    expect(() => createCrawlConfig({ startUrl, [field]: "true" })).toThrow(new RegExp(field));
+  });
+});

@@ -70,6 +70,7 @@ function createFrontier({ config, clock, onFatal, trace }) {
   const seen = new Map();
   const waiters = [];
   const buffer = new Map();
+  const contentHashes = new Set();
   let fetchReservations = 0;
   let inFlight = 0;
   let nextSequence = 0;
@@ -195,12 +196,26 @@ function createFrontier({ config, clock, onFatal, trace }) {
     }
   }
 
+  function noteContent(item) {
+    if (!config.dedupeContent || item.contentHash == null) {
+      return;
+    }
+    if (contentHashes.has(item.contentHash)) {
+      item.page.state = "skipped";
+      item.page.skipReason = "duplicate-content";
+      item.links = [];
+      return;
+    }
+    contentHashes.add(item.contentHash);
+  }
+
   function drain() {
     while (buffer.has(nextCommit)) {
       const item = buffer.get(nextCommit);
       buffer.delete(nextCommit);
       inFlight -= 1;
       try {
+        noteContent(item);
         if (!stopping) {
           reserveLinks(item, item.links);
         }

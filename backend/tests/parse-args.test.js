@@ -56,6 +56,24 @@ test("an absent --no-respect-robots does not set respectRobots", () => {
   const parsed = parseCliArgs(["https://example.com/"]);
 
   expect(parsed.options).not.toHaveProperty("respectRobots");
+  expect(parsed.options).not.toHaveProperty("dedupeContent");
+  expect(parsed.options).not.toHaveProperty("respectCanonical");
+});
+
+test("--no-dedupe-content and --no-canonical set those fields false", () => {
+  const parsed = parseCliArgs([
+    "https://example.com/",
+    "--no-dedupe-content",
+    "--no-canonical",
+  ]);
+
+  expect(parsed.options.dedupeContent).toBe(false);
+  expect(parsed.options.respectCanonical).toBe(false);
+});
+
+test("a value on --no-dedupe-content or --no-canonical is a ConfigError", () => {
+  expect(() => parseCliArgs(["https://example.com/", "--no-dedupe-content=true"])).toThrow(ConfigError);
+  expect(() => parseCliArgs(["https://example.com/", "--no-canonical=1"])).toThrow(/does not take an argument/);
 });
 
 test("--format and --output stay off the config object", () => {

@@ -15,6 +15,8 @@ const DEFAULTS = {
   maxUrlLength: 2048,
   maxPathDepth: 16,
   maxSegmentRepeats: 2,
+  dedupeContent: true,
+  respectCanonical: true,
 };
 
 const ALLOWED_KEYS = new Set(["startUrl", ...Object.keys(DEFAULTS)]);
@@ -126,6 +128,12 @@ function createCrawlConfig(options = {}) {
   }
   if (!isPositiveInteger(config.maxSegmentRepeats)) {
     throw new ConfigError("maxSegmentRepeats must be a positive integer");
+  }
+  if (typeof config.dedupeContent !== "boolean") {
+    throw new ConfigError("dedupeContent must be a boolean");
+  }
+  if (typeof config.respectCanonical !== "boolean") {
+    throw new ConfigError("respectCanonical must be a boolean");
   }
 
   return Object.freeze(config);
