@@ -66,11 +66,13 @@ test("present numbers replace only their own defaults", () => {
   expect(config).not.toHaveProperty("details");
 });
 
-test("--details is not a crawl config field", () => {
-  const { config, details } = createCliConfig([startUrl, "--details"]);
+test("--details and --trace are not crawl config fields", () => {
+  const { config, details, trace } = createCliConfig([startUrl, "--details", "--trace"]);
 
   expect(details).toBe(true);
+  expect(trace).toBe(true);
   expect(config).not.toHaveProperty("details");
+  expect(config).not.toHaveProperty("trace");
 });
 
 test("a missing URL is rejected", () => {

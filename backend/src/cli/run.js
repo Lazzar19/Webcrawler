@@ -26,6 +26,9 @@ async function runCli(argv, dependencies = {}) {
   try {
     invocation = createCliConfig(argv);
     format = normalizeFormat(invocation.format);
+    if (invocation.details && format !== "console") {
+      throw new ConfigError("--details is only valid with console output");
+    }
   } catch (error) {
     writeLine(stderr, error.message);
     return error instanceof ConfigError ? EXIT_CONFIG : EXIT_FATAL;
@@ -54,6 +57,7 @@ async function runCli(argv, dependencies = {}) {
       format,
       output: invocation.output,
       details: invocation.details,
+      trace: invocation.trace ? (dependencies.traceText ?? "") : "",
     });
     if (rendered.file) {
       writeFile(rendered.file.path, rendered.file.text);

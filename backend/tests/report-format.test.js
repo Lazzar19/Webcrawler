@@ -419,6 +419,50 @@ test("stdout carries one artifact, and --output keeps the summary on stdout", ()
   expect(detailedFile.file).toEqual({ path: "out.txt", text: formatDetails(result) });
 });
 
+test("trace stays off stdout and follows the stream table", () => {
+  const result = sampleResult();
+  const trace = "[trace] crawl-stop reason=completed\n";
+  const summary = formatConsole(result);
+  const details = formatDetails(result);
+  const json = formatJson(result);
+  const csv = formatCsv(result);
+
+  const jsonTrace = renderReport(result, { format: "json", trace });
+  expect(jsonTrace.stdout).toBe(json);
+  expect(jsonTrace.stderr).toBe(`${summary}${trace}`);
+  expect(jsonTrace.file).toBeNull();
+  expect(jsonTrace.stdout).not.toContain("[trace]");
+
+  const csvTrace = renderReport(result, { format: "csv", trace });
+  expect(csvTrace.stdout).toBe(csv);
+  expect(csvTrace.stderr).toBe(`${summary}${trace}`);
+  expect(csvTrace.file).toBeNull();
+
+  const outputTrace = renderReport(result, { format: "json", output: "report.json", trace });
+  expect(outputTrace.stdout).toBe(summary);
+  expect(outputTrace.stderr).toBe(trace);
+  expect(outputTrace.file).toEqual({ path: "report.json", text: json });
+  expect(outputTrace.stdout).not.toContain("[trace]");
+
+  const csvFile = renderReport(result, { format: "csv", output: "report.csv", trace });
+  expect(csvFile.stdout).toBe(summary);
+  expect(csvFile.stderr).toBe(trace);
+  expect(csvFile.file).toEqual({ path: "report.csv", text: csv });
+
+  const detailsFile = renderReport(result, { details: true, output: "report.txt", trace });
+  expect(detailsFile.stdout).toBe(details);
+  expect(detailsFile.stderr).toBe(trace);
+  expect(detailsFile.file).toEqual({ path: "report.txt", text: details });
+
+  const consoleTrace = renderReport(result, { trace });
+  expect(consoleTrace.stdout).toBe(summary);
+  expect(consoleTrace.stderr).toBe(trace);
+  expect(consoleTrace.file).toBeNull();
+
+  const ignored = renderReport(result, { format: "json", trace: "" });
+  expect(ignored.stderr).toBe(summary);
+});
+
 test("an unknown format is a ConfigError", () => {
   expect(() => renderReport(sampleResult(), { format: "yaml" })).toThrow(ConfigError);
   expect(() => renderReport(sampleResult(), { format: "yaml" })).toThrow(/yaml/);

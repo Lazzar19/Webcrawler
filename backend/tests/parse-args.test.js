@@ -9,6 +9,7 @@ test("a positional URL is startUrl and omitted flags stay omitted", () => {
   expect(parsed.format).toBeUndefined();
   expect(parsed.output).toBeUndefined();
   expect(parsed.details).toBe(false);
+  expect(parsed.trace).toBe(false);
 });
 
 test("numeric flags stay the typed characters, including an explicit 0", () => {
@@ -72,11 +73,19 @@ test("--format and --output stay off the config object", () => {
   expect(parsed.options).toEqual({});
 });
 
-test("--details stays off the config object", () => {
-  const parsed = parseCliArgs(["https://example.com/", "--details"]);
+test("--details and --trace stay off the config object", () => {
+  const parsed = parseCliArgs(["https://example.com/", "--details", "--trace"]);
 
   expect(parsed.details).toBe(true);
+  expect(parsed.trace).toBe(true);
   expect(parsed.options).toEqual({});
+});
+
+test("a value on --details or --trace is a ConfigError", () => {
+  expect(() => parseCliArgs(["https://example.com/", "--details=true"])).toThrow(ConfigError);
+  expect(() => parseCliArgs(["https://example.com/", "--details=true"])).toThrow(/does not take an argument/);
+  expect(() => parseCliArgs(["https://example.com/", "--trace=1"])).toThrow(ConfigError);
+  expect(() => parseCliArgs(["https://example.com/", "--trace=1"])).toThrow(/does not take an argument/);
 });
 
 test("zero positionals leaves startUrl empty", () => {

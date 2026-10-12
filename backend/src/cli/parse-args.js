@@ -13,6 +13,7 @@ const OPTIONS = {
   format: { type: "string" },
   output: { type: "string" },
   details: { type: "boolean" },
+  trace: { type: "boolean" },
 };
 
 function parseCliArgs(argv) {
@@ -65,6 +66,7 @@ function parseCliArgs(argv) {
     format: values.format,
     output: values.output,
     details: values.details === true,
+    trace: values.trace === true,
   };
 }
 

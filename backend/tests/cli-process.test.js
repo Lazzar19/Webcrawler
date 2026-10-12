@@ -102,6 +102,21 @@ describe("CLI child process", () => {
     expect(result.stdout).toBe("");
   });
 
+  test.each([
+    [["--format", "json", "--details"], /console output/],
+    [["--format", "csv", "--details"], /console output/],
+    [["--details=true"], /does not take an argument/],
+    [["--trace=1"], /does not take an argument/],
+  ])("rejected presentation %j exits 2 before a fetch", async (args, pattern) => {
+    const before = server.requests.length;
+    const result = await runCli([`${server.origin}/`, ...args]);
+
+    expect(result.code).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toMatch(pattern);
+    expect(server.requests.length).toBe(before);
+  });
+
   test("an explicit depth of 0 prints the summary and does not fetch the child", async () => {
     const start = `${server.origin}/`;
     const result = await runCli([

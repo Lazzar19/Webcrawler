@@ -111,6 +111,121 @@ test("a crawl exception and a failed --output write exit 1", async () => {
   expect(io.out()).toBe("");
 });
 
+test("--format json or csv with --details exits 2 and does not crawl", async () => {
+  for (const format of ["json", "csv"]) {
+    const io = streams();
+    let called = false;
+    const code = await runCli(["https://example.com/", "--format", format, "--details"], {
+      ...io,
+      signals: new EventEmitter(),
+      crawl() {
+        called = true;
+      },
+    });
+
+    expect(code).toBe(2);
+    expect(called).toBe(false);
+    expect(io.out()).toBe("");
+    expect(io.err()).toBe("--details is only valid with console output\n");
+  }
+});
+
+test("a value on --details or --trace exits 2 and does not crawl", async () => {
+  for (const arg of ["--details=true", "--trace=1"]) {
+    const io = streams();
+    let called = false;
+    const code = await runCli(["https://example.com/", arg], {
+      ...io,
+      signals: new EventEmitter(),
+      crawl() {
+        called = true;
+      },
+    });
+
+    expect(code).toBe(2);
+    expect(called).toBe(false);
+    expect(io.out()).toBe("");
+    expect(io.err()).toMatch(/does not take an argument/);
+  }
+});
+
+test("--trace places its text on stderr and never on stdout", async () => {
+  const trace = "[trace] crawl-stop reason=completed\n";
+  const jsonIo = streams();
+  const jsonCode = await runCli(["https://example.com/", "--format", "json", "--trace"], {
+    ...jsonIo,
+    signals: new EventEmitter(),
+    traceText: trace,
+    crawl(config) {
+      expect(config).not.toHaveProperty("trace");
+      return resultFor(config.startUrl);
+    },
+  });
+  expect(jsonCode).toBe(0);
+  expect(JSON.parse(jsonIo.out()).startUrl).toBe("https://example.com/");
+  expect(jsonIo.out()).not.toContain("[trace]");
+  expect(jsonIo.err().startsWith("completed https://example.com/")).toBe(true);
+  expect(jsonIo.err().endsWith(trace)).toBe(true);
+
+  const quiet = streams();
+  await runCli(["https://example.com/", "--format", "json"], {
+    ...quiet,
+    signals: new EventEmitter(),
+    traceText: trace,
+    crawl(config) {
+      return resultFor(config.startUrl);
+    },
+  });
+  expect(quiet.err()).not.toContain("[trace]");
+  expect(quiet.out()).not.toContain("[trace]");
+
+  const fileIo = streams();
+  let written = null;
+  const fileCode = await runCli(
+    ["https://example.com/", "--output", "out.json", "--format", "json", "--trace"],
+    {
+      ...fileIo,
+      signals: new EventEmitter(),
+      traceText: trace,
+      writeFile(path, text) {
+        written = { path, text };
+      },
+      crawl(config) {
+        return resultFor(config.startUrl);
+      },
+    },
+  );
+  expect(fileCode).toBe(0);
+  expect(fileIo.out().startsWith("completed https://example.com/")).toBe(true);
+  expect(fileIo.out()).not.toContain("[trace]");
+  expect(fileIo.err()).toBe(trace);
+  expect(written.path).toBe("out.json");
+  expect(JSON.parse(written.text).startUrl).toBe("https://example.com/");
+  expect(written.text).not.toContain("[trace]");
+
+  const detailsIo = streams();
+  let detailsFile = null;
+  const detailsCode = await runCli(
+    ["https://example.com/", "--output", "out.txt", "--details", "--trace"],
+    {
+      ...detailsIo,
+      signals: new EventEmitter(),
+      traceText: trace,
+      writeFile(_path, text) {
+        detailsFile = text;
+      },
+      crawl(config) {
+        return resultFor(config.startUrl);
+      },
+    },
+  );
+  expect(detailsCode).toBe(0);
+  expect(detailsIo.out()).toContain("pages");
+  expect(detailsIo.out()).not.toContain("[trace]");
+  expect(detailsIo.err()).toBe(trace);
+  expect(detailsFile).toBe(detailsIo.out());
+});
+
 test("json without --output puts JSON on stdout and the summary on stderr", async () => {
   const io = streams();
   const code = await runCli(["https://example.com/", "--format", "json"], {

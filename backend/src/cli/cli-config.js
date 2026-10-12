@@ -32,6 +32,7 @@ function createCliConfig(argv) {
     format: parsed.format,
     output: parsed.output,
     details: parsed.details,
+    trace: parsed.trace,
   };
 }
 

@@ -685,12 +685,12 @@ Integration tests use a real server, not a `fetch` mock.
 
 ## Current Status
 
-**Active milestone:** Milestone 6 - Terminal output. Milestones 0–5 are complete. The default console is the count summary, and `--details` adds the page table. Flag rejection, the stream table for `--trace`, and the README sample have not started.
+**Active milestone:** Milestone 6 - Terminal output. Milestones 0–5 are complete. The summary, `--details`, the flag rejections, and the stream placement are in. The trace sink and the README sample have not started.
 
 **Known behavior of the code today:**
 
 - `[x]` A frontier crawl, config validation, a robots manager on `robots-parser`, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 267 tests.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 276 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
 - `[x]` `npm start` from `backend/` runs `src/main.js` through `runCli`. A bad URL or flag exits `2`. A finished crawl exits `0`, including when pages failed. A fatal error or a failed `--output` write exits `1`. The second SIGINT exits `130`. The default stdout artifact is the console summary. `--format json` or `csv` without `--output` puts that artifact on stdout and the summary on stderr. `--output` writes the chosen format and still prints the summary.
@@ -708,7 +708,7 @@ Integration tests use a real server, not a `fetch` mock.
 - `[x]` A file is written only for `--output`. There is no guessed Desktop path. Console, JSON, and CSV keep `pages` in creation order.
 - `[x]` Node is pinned to 24, and ESLint checks `backend/`.
 - `[x]` `docker build -t webcrawler .` then `docker run --rm webcrawler` runs the fixture demo. The image uses Node 24, a non-root user, and a deps stage that is not the runtime. The repository does not publish the image.
-- `[x]` The default console is the count summary. `--details` prints that summary, then the page table. `--trace` is not implemented. JSON and CSV stay as they are.
+- `[x]` The default console is the count summary. `--details` prints that summary, then the page table. `--format json --details` and `--format csv --details` exit `2` before a crawl. `--details=true` and `--trace=1` exit `2`. `--trace` is accepted, and its text goes to stderr only. The sink that emits trace events has not started. JSON and CSV stay as they are.
 - `[ ]` There is no crawl budget. `maxDurationMs` and `maxTotalAttempts` are not config fields yet. Milestone 7 adds them. Every non-fatal stop is still `interrupted`.
 - `[ ]` There are no crawler-trap guards. Milestone 8 adds URL length, path depth, and repeated segments.
 - `[ ]` A repeated HTML body is fetched and its links are reserved. A `rel=canonical` href is not read. Milestone 9 adds both.
@@ -857,8 +857,8 @@ Part A, summary and details:
 
 - `[x]` Replace the one-line page listing with the console summary. Counts come from `CrawlResult.counts`. Skip and failure blocks are reporter-derived, omit empty blocks, and sort by count then name.
 - `[x]` Add `--details`. Print the summary, then the page table in `pages` order, with the column widths and the 64-character URL rule. Print the shortened-URL note only when a row was shortened.
-- `[ ]` Reject `--format json --details` and `--format csv --details` as a `ConfigError` before a crawl. Reject `--details=true` and `--trace=1`.
-- `[ ]` Follow the stream table, including `--output` with and without `--trace` and `--details`.
+- `[x]` Reject `--format json --details` and `--format csv --details` as a `ConfigError` before a crawl. Reject `--details=true` and `--trace=1`.
+- `[x]` Follow the stream table, including `--output` with and without `--trace` and `--details`.
 - `[x]` Rewrite the console assertions in the reporter, CLI, and demo tests. Default stdout has the crawl counts and does not list page URLs. `--details` lists them in order. JSON and CSV keep the full URL.
 - `[ ]` Update the README console sample and add the three commands in Output's verification list.
 
@@ -1385,7 +1385,18 @@ Approved: 2026-10-12. The README sections Design decisions and Known limitations
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 267 tests. The reporter test compares the Output sample, including the padded counts and the details table.
 - **Lesson learned:** The old fetching line was a way to keep a partial report from throwing. The summary does not need that line. The table is the place a leaked `fetching` record is visible.
 
+### 2026-10-12 - Flag rejection and stream placement
+
+- **Problem:** `--details` could be combined with JSON or CSV, and a boolean flag could be given a value. The stream table also said where a trace line belongs, but nothing placed it.
+- **Chosen solution:** `--format json --details` and `--format csv --details` throw `ConfigError` `--details is only valid with console output` after format validation and before `crawl()`. `--details=true` and `--trace=1` are rejected by `parseArgs` because those flags are booleans, and the CLI wraps that as a `ConfigError`. `--trace` is not a config field. `renderReport` takes a trace string. With no `--output`, JSON and CSV keep the artifact on stdout and put the summary, then the trace, on stderr. With `--output`, stdout is the human text, stderr is the trace only, and the file is the chosen format. `--details` with `--output` writes the same page table to stdout and the file. The string is empty until the sink in Part B emits events, so a crawl with `--trace` does not invent lines.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 276 tests. A child process against the fixture exits `2` for the rejected forms and does not record a request.
+- **Lesson learned:** The place a line is printed can be locked before the line exists. The sink still has to emit the events; placement does not replay `CrawlResult`.
+
 ## Change Log
+
+### 2026-10-12 (Flag rejection and stream placement)
+
+- `--details` is rejected with JSON and CSV before a crawl. A value on `--details` or `--trace` is a `ConfigError`. Trace text is placed on stderr only. The event sink has not started.
 
 ### 2026-10-12 (Console summary and details)
 

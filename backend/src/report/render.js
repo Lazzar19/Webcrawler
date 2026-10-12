@@ -15,36 +15,32 @@ function normalizeFormat(format) {
   return format;
 }
 
-function artifact(result, format) {
-  if (format === "json") {
-    return formatJson(result);
-  }
+function machineText(result, format) {
   if (format === "csv") {
     return formatCsv(result);
   }
-  return formatConsole(result);
+  return formatJson(result);
 }
 
-function humanText(result, details) {
-  return details ? formatDetails(result) : formatConsole(result);
+function withTrace(text, trace) {
+  if (!trace) {
+    return text;
+  }
+  return `${text}${trace}`;
 }
 
-function renderReport(result, { format, output, details = false } = {}) {
+function renderReport(result, { format, output, details = false, trace = "" } = {}) {
   const chosen = normalizeFormat(format);
   const summary = formatConsole(result);
-  const human = humanText(result, details && chosen === "console");
-  const body = chosen === "console" ? human : artifact(result, chosen);
-  if (output) {
-    return {
-      stdout: chosen === "console" ? human : summary,
-      stderr: "",
-      file: { path: output, text: body },
-    };
-  }
-  if (chosen === "console") {
-    return { stdout: human, stderr: "", file: null };
-  }
-  return { stdout: body, stderr: summary, file: null };
+  const human = details && chosen === "console" ? formatDetails(result) : summary;
+  const machine = chosen === "console" ? human : machineText(result, chosen);
+  const file = output ? { path: output, text: machine } : null;
+  const humanOnStdout = Boolean(output) || chosen === "console";
+  return {
+    stdout: humanOnStdout ? human : machine,
+    stderr: withTrace(humanOnStdout ? "" : summary, trace),
+    file,
+  };
 }
 
 module.exports = {
