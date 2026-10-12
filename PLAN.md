@@ -183,6 +183,7 @@ Fixed constants, not configuration: retry delay cap 5000 ms, crawl-delay cap 10 
 - Zero positionals leaves `startUrl` empty for the validation step. A second positional is a `ConfigError`.
 - An unknown flag, or a flag that requires a value and has none, is a `ConfigError`. The parser does not accept a second name for the same option.
 - Validation reads that result and calls `createCrawlConfig`. A numeric flag must be one or more digits. `0` becomes the number 0 and is passed in, so the default does not replace it. Any other spelling is a `ConfigError`. `createCrawlConfig` then applies the URL rule and the positive or non-negative rule. `--format` and `--output` stay beside the config and are not checked here.
+- The runner accepts `--format` `console` (the default when the flag is absent), `json`, or `csv`. Any other value is a `ConfigError` and exit `2`, before a crawl.
 
 An omitted field other than `startUrl` gets the default above. An unknown config key is a configuration error, so a typo cannot silently fall back to a default. Validation: `maxDepth` and `retryCount` and `minIntervalMs` and `retryBaseDelayMs` are non-negative integers. `maxPages`, `concurrency`, `perOriginLimit`, `timeoutMs`, and `maxResponseBytes` are positive integers. `respectRobots` is a boolean. `userAgent` is a non-empty string.
 
@@ -375,6 +376,10 @@ robots https://example.com allow-all 404
 - When `finalUrl` is not null and is not `requestedUrl`, append `final {finalUrl}` to that page line. That is how a redirect stays visible. `discoveredFrom`, `waitedMs`, `contentType`, `byteLength`, and `attempts` stay in JSON and CSV. They are not on the console line.
 - Then one line per robots entry, in result order: `robots {origin} {outcome} {statusCode}`. Append `{errorKind}` only when it is not null. Omit `{statusCode}` when it is null.
 - stdout carries one artifact. With `--format console` (the default), the summary goes to stdout. With `--format json` or `csv` and no `--output`, that format goes to stdout and the summary goes to stderr. With `--output`, the chosen format is written to that path, and the summary goes to stdout.
+- JSON is `JSON.stringify` of the `CrawlResult` with a two-space indent and a trailing newline. It adds no fields.
+- The CSV's first row is the `PageResult` field names in contract order. Each later row is one page. `null` is an empty cell. A cell that contains a comma, a quote, or a newline is wrapped in quotes, and each quote inside it is doubled.
+- A failed `--output` write prints the error on stderr, does not print the report, and exits `1`.
+- The first SIGINT aborts the crawl signal. In-flight work finishes, the partial result is reported, and the process exits `0`. The second SIGINT exits `130` immediately and does not write the report.
 - This report is Milestone 3. Milestone 2 does not print it and does not delete `report.js`.
 - On the first SIGINT, stop handing out queued items, let in-flight items finish including their retries, reserve nothing from any commit after the signal (the stopping rule in Commit order), write the partial `CrawlResult` with `stopReason: "interrupted"`, and exit `0`. A second SIGINT exits `130` immediately without writing.
 
@@ -462,15 +467,15 @@ Integration tests use a real server, not a `fetch` mock.
 
 ## Current Status
 
-**Active milestone:** Milestone 3 - CLI and reports. URL and number validation is in place. Exit codes have not started.
+**Active milestone:** Milestone 3 - CLI and reports. Exit codes and the three report formats are in place. Deleting the Desktop writer has not started.
 
 **Known behavior of the code today:**
 
 - `[x]` A frontier crawl, config validation, a robots manager on `robots-parser`, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 234 tests.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 247 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
-- `[x]` `npm start` from `backend/` runs `src/main.js`. It still reads a positional depth and max pages. `createCliConfig` accepts the Milestone 3 flags, rejects a bad URL or number, and keeps an explicit `0`. It is not wired into `main.js` yet.
+- `[x]` `npm start` from `backend/` runs `src/main.js` through `runCli`. A bad URL or flag exits `2`. A finished crawl exits `0`, including when pages failed. A fatal error or a failed `--output` write exits `1`. The second SIGINT exits `130`. The default stdout artifact is the console summary. `--format json` or `csv` without `--output` puts that artifact on stdout and the summary on stderr. `--output` writes the chosen format and still prints the summary.
 - `[x]` The duplicate root crawler and the Vite starter are gone.
 - `[x]` `concurrency` is the worker count. `p-limit` is gone. A parent no longer holds a slot while waiting for children.
 - `[x]` `maxPages` counts fetch reservations. The default is `50`. `Infinity` is rejected.
@@ -482,7 +487,7 @@ Integration tests use a real server, not a `fetch` mock.
 - `[x]` Retries stay inside the HTTP client. `timeout`, `connect`, `reset`, and `429`/`500`/`502`/`503`/`504` retry. `dns`, `tls`, `too-large`, redirects, and every other status do not. Backoff runs through the clock before `beforeAttempt`. `Retry-After` on `429` or `503` can only raise that wait, and a wait above 5000 ms returns the response. Fatal-stop ends the sleep and does not abort `fetch`.
 - `[x]` `robots-parser` decides allow and crawl-delay. One `robots.txt` fetch is shared per origin, on the worker's existing lease. A disallowed path is `skipped` / `robots` and is not requested. An unavailable file is `skipped` / `robots-unavailable`. The custom parser is gone.
 - `[x]` The politeness gate is a per-origin FIFO of leases. `beforeAttempt` claims `nextAllowedAt` before it waits. The gap is `minIntervalMs` until a parsed crawl-delay is larger, then that delay, capped at 10 seconds. `waitedMs` runs from `take()` through that page's own gap. Fatal-stop ends the wait and does not release a held lease.
-- `[!]` `printReport` still writes a CSV onto a guessed Desktop path, including a Windows path when run from WSL. The macOS branch is unreachable. `npm start` does not call it. The terminal still prints one counts line. Replacing that with the console summary, and deleting the Desktop writer, is later in Milestone 3.
+- `[!]` `printReport` still writes a CSV onto a guessed Desktop path, including a Windows path when run from WSL. The macOS branch is unreachable. `npm start` does not call it. Deleting `getDesktopPath`, `saveToCSV`, and `printReport` is the next Milestone 3 item.
 - `[x]` Node is pinned to 24, and ESLint checks `backend/`.
 
 ## Milestones
@@ -585,11 +590,11 @@ The console summary in Output is not part of this milestone.
 
 - `[x]` Parse with `node:util` `parseArgs`. Accept a positional URL plus `--depth`, `--max-pages`, `--concurrency`, `--per-origin`, `--min-interval`, `--timeout`, `--user-agent`, `--no-respect-robots`, `--format`, and `--output`.
 - `[x]` Validate the URL and every number. Preserve an explicit `0` for depth. Unknown flags are errors.
-- `[ ]` Use exit codes `0`, `1`, `2`, and `130` as specified above.
-- `[ ]` Emit the console summary from Output, plus JSON and CSV, from `CrawlResult`, following the one-artifact-on-stdout rule. CSV escapes commas, quotes, and newlines. The console text matches the sample, including a skipped page, a failed page, a redirect `final` suffix, and a robots line.
+- `[x]` Use exit codes `0`, `1`, `2`, and `130` as specified above.
+- `[x]` Emit the console summary from Output, plus JSON and CSV, from `CrawlResult`, following the one-artifact-on-stdout rule. CSV escapes commas, quotes, and newlines. The console text matches the sample, including a skipped page, a failed page, a redirect `final` suffix, and a robots line.
 - `[ ]` Write files only to `--output`. Delete `getDesktopPath`, `saveToCSV`, and `printReport` in that change. No guessed Desktop path remains.
 - `[ ]` Delete `sortPages` and rewrite [backend/tests/report.test.js](backend/tests/report.test.js). The console summary and every other reporter keep `pages` in creation order. The hit-count sort goes away with the Desktop writer.
-- `[ ]` On SIGINT, stop handing out items, finish in-flight work, and emit the partial result.
+- `[x]` On SIGINT, stop handing out items, finish in-flight work, and emit the partial result.
 - `[ ]` Test the CLI as a child process against the fixture: bad arguments, explicit `0`, JSON shape, JSON on stdout being parseable, CSV escaping, and a crawl that includes a failed page.
 
 **Done when:** `node backend/src/main.js` against the fixture prints the console summary from Output, a stranger can see which pages were fetched, skipped, and failed, no CSV is written to a Desktop path, and JSON matches the result shape.
@@ -989,7 +994,29 @@ These replace the looser readings from the first draft of this checkpoint.
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 234 tests. Explicit `0` stays `0` for depth and for `minIntervalMs`. `0` is rejected for the positive limits.
 - **Lesson learned:** The default applies only when the flag is absent. Once the characters are a number, `0` is a real setting.
 
+### 2026-10-12 - Exit codes
+
+- **Problem:** `main.js` still read a positional depth and max pages, printed one counts line, and used exit `1` for a missing URL. A second interrupt had no path to exit `130`.
+- **Chosen solution:** `runCli` builds config with `createCliConfig`. A `ConfigError`, including an unknown `--format`, exits `2` before a crawl. A finished crawl exits `0` even when pages failed. A thrown crawl error, or a failed `--output` write, exits `1` and does not print the report. The first SIGINT aborts the crawl signal, the partial result is reported, and the process exits `0`. The second SIGINT exits `130` and skips the report.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 247 tests. Injected crawls lock exits `0`, `1`, `2`, and `130`, including an explicit depth `0` and a write failure.
+- **Lesson learned:** Exit `0` means the crawl finished. A failed page is a record, not a failed process. Exit `130` is only the second interrupt, and it has to happen before the report is written.
+
+### 2026-10-12 - Report formats
+
+- **Problem:** The human report was specified, and the process still printed `Crawled N pages`. JSON and CSV had no path that followed the one-artifact rule.
+- **Chosen solution:** The console summary is the sample: header, counts, one line per page in result order, then robots. Nulls are omitted. A redirect appends `final`. JSON is the `CrawlResult` with a two-space indent. CSV columns are the `PageResult` fields, `null` is empty, and commas, quotes, and newlines are quoted. `--format json` or `csv` without `--output` puts that text on stdout and the summary on stderr. `--output` writes the chosen format and prints the summary on stdout. `printReport` is still in the tree and `npm start` does not call it.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 247 tests. The console fixture matches the sample, including a skipped page, a failed page, a redirect `final` suffix, and a robots line.
+- **Lesson learned:** The summary is a view of `CrawlResult`. It does not sort, drop pages, or recompute the counts.
+
 ## Change Log
+
+### 2026-10-12 (Report formats)
+
+- The console summary, JSON, and CSV are rendered from `CrawlResult`. Stdout carries one artifact. `--output` writes the chosen format and the summary stays on stdout.
+
+### 2026-10-12 (Exit codes)
+
+- `runCli` exits `2` for a bad URL or flag, `0` when the crawl finishes, `1` for a fatal error or a failed `--output` write, and `130` on the second SIGINT. The first SIGINT reports the partial result and exits `0`.
 
 ### 2026-10-11 (CLI validation)
 
