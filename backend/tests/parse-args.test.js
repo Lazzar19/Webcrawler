@@ -8,6 +8,7 @@ test("a positional URL is startUrl and omitted flags stay omitted", () => {
   expect(parsed.options).toEqual({});
   expect(parsed.format).toBeUndefined();
   expect(parsed.output).toBeUndefined();
+  expect(parsed.details).toBe(false);
 });
 
 test("numeric flags stay the typed characters, including an explicit 0", () => {
@@ -67,6 +68,14 @@ test("--format and --output stay off the config object", () => {
 
   expect(parsed.format).toBe("json");
   expect(parsed.output).toBe("out.json");
+  expect(parsed.details).toBe(false);
+  expect(parsed.options).toEqual({});
+});
+
+test("--details stays off the config object", () => {
+  const parsed = parseCliArgs(["https://example.com/", "--details"]);
+
+  expect(parsed.details).toBe(true);
   expect(parsed.options).toEqual({});
 });
 

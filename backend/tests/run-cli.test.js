@@ -75,7 +75,7 @@ test("an explicit depth of 0 is passed through and a failed page still exits 0",
 
   expect(code).toBe(0);
   expect(seen.maxDepth).toBe(0);
-  expect(io.out()).toContain("failed 1");
+  expect(io.out()).toMatch(/failed\s+1/);
   expect(io.out().startsWith("completed https://example.com/")).toBe(true);
 });
 

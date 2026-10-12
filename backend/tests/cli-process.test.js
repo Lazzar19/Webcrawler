@@ -117,12 +117,10 @@ describe("CLI child process", () => {
     expect(result.code).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain(`completed ${start}`);
-    expect(result.stdout).toContain(`ok 200 ${start} depth 0`);
-    expect(result.stdout).toContain(`skipped ${server.origin}/child depth 1 depth-limit`);
-    expect(result.stdout).toContain(`skipped ${server.origin}/missing depth 1 depth-limit`);
-    expect(result.stdout).toContain(`skipped ${server.origin}/notes.txt depth 1 depth-limit`);
-    expect(result.stdout).toContain("failed 0");
-    expect(result.stdout).not.toContain("failed 404");
+    expect(result.stdout).toContain("crawl");
+    expect(result.stdout).toContain("depth-limit");
+    expect(result.stdout).not.toContain("/child");
+    expect(result.stdout).not.toContain("http-status");
     expect(server.requests.some((request) => request.path === "/child")).toBe(false);
   });
 
@@ -191,7 +189,8 @@ describe("CLI child process", () => {
     expect(result.code).toBe(0);
     expect(result.stdout.startsWith(PAGE_FIELDS.join(","))).toBe(true);
     expect(result.stdout).toContain('"text/html; charset=""utf-8, x"""');
-    expect(result.stderr).toContain(`ok 200 ${server.origin}/`);
+    expect(result.stderr).toContain("crawl");
+    expect(result.stderr).toContain("depth-limit");
   });
 
   test("a crawl with a failed page shows ok, skipped, and failed", async () => {
@@ -208,9 +207,10 @@ describe("CLI child process", () => {
 
     expect(result.code).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain(`ok 200 ${start} depth 0`);
-    expect(result.stdout).toContain(`failed 404 ${server.origin}/missing depth 1 http-status HTTP 404`);
-    expect(result.stdout).toContain(`skipped ${server.origin}/notes.txt depth 1 non-html`);
-    expect(result.stdout).toContain(`ok 200 ${server.origin}/child depth 1`);
+    expect(result.stdout).toContain("crawl");
+    expect(result.stdout).toContain("http-status");
+    expect(result.stdout).toContain("non-html");
+    expect(result.stdout).not.toContain("/child");
+    expect(result.stdout).not.toContain("/missing");
   });
 });

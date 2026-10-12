@@ -1,6 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
-const { formatConsole } = require("../src/report/console.js");
+const { formatConsole, formatDetails } = require("../src/report/console.js");
 const { formatCsv } = require("../src/report/csv.js");
 const { formatJson } = require("../src/report/json.js");
 
@@ -66,7 +66,9 @@ test("console, JSON, and CSV keep pages in creation order", () => {
     page(earlier, 0, "ok"),
   ]);
 
-  const consoleText = formatConsole(result);
+  expect(formatConsole(result)).not.toContain(later);
+  expect(formatConsole(result)).not.toContain(earlier);
+  const consoleText = formatDetails(result);
   expect(consoleText.indexOf(later)).toBeLessThan(consoleText.indexOf(earlier));
 
   const parsed = JSON.parse(formatJson(result));

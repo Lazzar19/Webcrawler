@@ -12,6 +12,7 @@ const OPTIONS = {
   "no-respect-robots": { type: "boolean" },
   format: { type: "string" },
   output: { type: "string" },
+  details: { type: "boolean" },
 };
 
 function parseCliArgs(argv) {
@@ -63,6 +64,7 @@ function parseCliArgs(argv) {
     options,
     format: values.format,
     output: values.output,
+    details: values.details === true,
   };
 }
 

@@ -1,5 +1,5 @@
 const { ConfigError } = require("../crawler/crawl-config.js");
-const { formatConsole } = require("./console.js");
+const { formatConsole, formatDetails } = require("./console.js");
 const { formatCsv } = require("./csv.js");
 const { formatJson } = require("./json.js");
 
@@ -25,19 +25,24 @@ function artifact(result, format) {
   return formatConsole(result);
 }
 
-function renderReport(result, { format, output } = {}) {
+function humanText(result, details) {
+  return details ? formatDetails(result) : formatConsole(result);
+}
+
+function renderReport(result, { format, output, details = false } = {}) {
   const chosen = normalizeFormat(format);
   const summary = formatConsole(result);
-  const body = artifact(result, chosen);
+  const human = humanText(result, details && chosen === "console");
+  const body = chosen === "console" ? human : artifact(result, chosen);
   if (output) {
     return {
-      stdout: summary,
+      stdout: chosen === "console" ? human : summary,
       stderr: "",
       file: { path: output, text: body },
     };
   }
   if (chosen === "console") {
-    return { stdout: summary, stderr: "", file: null };
+    return { stdout: human, stderr: "", file: null };
   }
   return { stdout: body, stderr: summary, file: null };
 }

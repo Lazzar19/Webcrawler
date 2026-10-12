@@ -31,6 +31,7 @@ function createCliConfig(argv) {
     config: createCrawlConfig(options),
     format: parsed.format,
     output: parsed.output,
+    details: parsed.details,
   };
 }
 

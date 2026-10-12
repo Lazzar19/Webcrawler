@@ -50,7 +50,11 @@ async function runCli(argv, dependencies = {}) {
     if (secondInterrupt) {
       return EXIT_SECOND_INTERRUPT;
     }
-    const rendered = renderReport(result, { format, output: invocation.output });
+    const rendered = renderReport(result, {
+      format,
+      output: invocation.output,
+      details: invocation.details,
+    });
     if (rendered.file) {
       writeFile(rendered.file.path, rendered.file.text);
     }

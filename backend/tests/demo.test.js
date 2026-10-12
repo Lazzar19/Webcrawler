@@ -32,13 +32,14 @@ test("the fixture demo prints a summary and exits 0", async () => {
 
   expect(result.code).toBe(0);
   expect(result.stderr).toBe("");
-  expect(result.stdout).toContain("ok 200");
+  expect(result.stdout).toContain("crawl");
   expect(result.stdout).toContain("skipped");
   expect(result.stdout).toContain("robots");
-  expect(result.stdout).toContain("failed 404");
+  expect(result.stdout).toContain("http-status");
   expect(result.stdout).toContain("non-html");
   expect(result.stdout).toContain("other-origin");
-  expect(result.stdout).toContain("depth 1 robots");
+  expect(result.stdout).not.toContain("/secret");
+  expect(result.stdout).not.toContain("/docs");
 });
 
 test("the fixture demo can print JSON", async () => {
@@ -51,5 +52,6 @@ test("the fixture demo can print JSON", async () => {
   expect(parsed.config.maxDepth).toBe(1);
   expect(parsed.config.minIntervalMs).toBe(0);
   expect(parsed.pages.some((page) => page.state === "failed")).toBe(true);
-  expect(result.stderr).toContain("failed 404");
+  expect(result.stderr).toContain("http-status");
+  expect(result.stderr).not.toContain("failed 404");
 });

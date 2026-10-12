@@ -63,6 +63,14 @@ test("present numbers replace only their own defaults", () => {
   expect(output).toBe("out.json");
   expect(config).not.toHaveProperty("format");
   expect(config).not.toHaveProperty("output");
+  expect(config).not.toHaveProperty("details");
+});
+
+test("--details is not a crawl config field", () => {
+  const { config, details } = createCliConfig([startUrl, "--details"]);
+
+  expect(details).toBe(true);
+  expect(config).not.toHaveProperty("details");
 });
 
 test("a missing URL is rejected", () => {

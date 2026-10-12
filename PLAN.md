@@ -685,12 +685,12 @@ Integration tests use a real server, not a `fetch` mock.
 
 ## Current Status
 
-**Active milestone:** Milestone 6 - Terminal output. Milestones 0–5 are complete. The console still prints one line per page until this milestone lands.
+**Active milestone:** Milestone 6 - Terminal output. Milestones 0–5 are complete. The default console is the count summary, and `--details` adds the page table. Flag rejection, the stream table for `--trace`, and the README sample have not started.
 
 **Known behavior of the code today:**
 
 - `[x]` A frontier crawl, config validation, a robots manager on `robots-parser`, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 263 tests.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 267 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
 - `[x]` `npm start` from `backend/` runs `src/main.js` through `runCli`. A bad URL or flag exits `2`. A finished crawl exits `0`, including when pages failed. A fatal error or a failed `--output` write exits `1`. The second SIGINT exits `130`. The default stdout artifact is the console summary. `--format json` or `csv` without `--output` puts that artifact on stdout and the summary on stderr. `--output` writes the chosen format and still prints the summary.
@@ -708,7 +708,7 @@ Integration tests use a real server, not a `fetch` mock.
 - `[x]` A file is written only for `--output`. There is no guessed Desktop path. Console, JSON, and CSV keep `pages` in creation order.
 - `[x]` Node is pinned to 24, and ESLint checks `backend/`.
 - `[x]` `docker build -t webcrawler .` then `docker run --rm webcrawler` runs the fixture demo. The image uses Node 24, a non-root user, and a deps stage that is not the runtime. The repository does not publish the image.
-- `[ ]` The default console is still one line per page. Milestone 6 replaces that with the summary, `--details`, and `--trace` in Output. JSON and CSV stay as they are.
+- `[x]` The default console is the count summary. `--details` prints that summary, then the page table. `--trace` is not implemented. JSON and CSV stay as they are.
 - `[ ]` There is no crawl budget. `maxDurationMs` and `maxTotalAttempts` are not config fields yet. Milestone 7 adds them. Every non-fatal stop is still `interrupted`.
 - `[ ]` There are no crawler-trap guards. Milestone 8 adds URL length, path depth, and repeated segments.
 - `[ ]` A repeated HTML body is fetched and its links are reserved. A `rel=canonical` href is not read. Milestone 9 adds both.
@@ -855,11 +855,11 @@ The contract is Output. Part A is reporters and CLI flags. Part B is the trace s
 
 Part A, summary and details:
 
-- `[ ]` Replace the one-line page listing with the console summary. Counts come from `CrawlResult.counts`. Skip and failure blocks are reporter-derived, omit empty blocks, and sort by count then name.
-- `[ ]` Add `--details`. Print the summary, then the page table in `pages` order, with the column widths and the 64-character URL rule. Print the shortened-URL note only when a row was shortened.
+- `[x]` Replace the one-line page listing with the console summary. Counts come from `CrawlResult.counts`. Skip and failure blocks are reporter-derived, omit empty blocks, and sort by count then name.
+- `[x]` Add `--details`. Print the summary, then the page table in `pages` order, with the column widths and the 64-character URL rule. Print the shortened-URL note only when a row was shortened.
 - `[ ]` Reject `--format json --details` and `--format csv --details` as a `ConfigError` before a crawl. Reject `--details=true` and `--trace=1`.
 - `[ ]` Follow the stream table, including `--output` with and without `--trace` and `--details`.
-- `[ ]` Rewrite the console assertions in the reporter, CLI, and demo tests. Default stdout has the crawl counts and does not list page URLs. `--details` lists them in order. JSON and CSV keep the full URL.
+- `[x]` Rewrite the console assertions in the reporter, CLI, and demo tests. Default stdout has the crawl counts and does not list page URLs. `--details` lists them in order. JSON and CSV keep the full URL.
 - `[ ]` Update the README console sample and add the three commands in Output's verification list.
 
 Part B, trace:
@@ -1378,7 +1378,18 @@ Approved: 2026-10-12. The README sections Design decisions and Known limitations
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 263 tests.
 - **Lesson learned:** A reporter that throws is a second failure mode. The partial crawl has to survive a state the engine is not supposed to emit.
 
+### 2026-10-12 - Console summary and details
+
+- **Problem:** `npm start` printed one line per page, including the full URL. A first run against a real site was a wall of text.
+- **Chosen solution:** `formatConsole` prints the completion line, the six `CrawlResult.counts`, then skip and failure tallies sorted by count and then name, then robots rows in result order. Empty skip, failure, and robots blocks are omitted. `--details` is a boolean presentation flag, not a config field. It prints that summary and then a `pages` table in result order. A display URL longer than 64 characters is shortened, and the note is printed only then. `canonicalUrl` in JSON and CSV stays complete. A leaked `fetching` row is a table row; the summary does not list it and does not throw.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 267 tests. The reporter test compares the Output sample, including the padded counts and the details table.
+- **Lesson learned:** The old fetching line was a way to keep a partial report from throwing. The summary does not need that line. The table is the place a leaked `fetching` record is visible.
+
 ## Change Log
+
+### 2026-10-12 (Console summary and details)
+
+- The default console is the count summary. `--details` adds the page table and shortens only the displayed URL. JSON and CSV are unchanged. `--trace` and the flag-combination rejections have not started.
 
 ### 2026-10-12 (Trap guards and content identity)
 
