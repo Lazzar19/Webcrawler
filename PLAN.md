@@ -21,7 +21,7 @@ A reviewer should be able to clone the repo, run one command, and see a crawl wh
 
 ### CV cutoff
 
-Milestones 0 through 4 are the portfolio. Milestone 5 (a single Docker image) is optional polish. The frozen list below is out of the CV scope.
+Milestones 0 through 4 are the portfolio. Milestone 5 (a single Docker image) is optional polish. Milestones 6 and 7 are the current work. Milestones 8 and 9 follow them. Anything that is not a milestone yet is in Future work.
 
 ### Learning themes
 
@@ -57,7 +57,7 @@ These apply to every change made by an agent, including Grok. They exist because
 - At each checkpoint in [Checkpoints](#checkpoints), write the artifact first, then stop and ask the author to review it. Do not write the implementation it describes until the author approves. Record the approval date in the learning-log entry.
 - Work one milestone at a time. Do not implement later-milestone behavior early unless a checklist item says so.
 - Every change keeps `npm run verify` green. Do not delete or weaken a test to make it pass. Tests that lock retired behavior are rewritten only where a checklist item says so.
-- Do not edit Frozen scope into existence. Do not add dependencies other than the ones listed in [Dependencies](#dependencies).
+- Do not implement Future work until an item is promoted into a milestone. Do not add dependencies other than the ones listed in [Dependencies](#dependencies).
 
 ### Architecture constraints
 
@@ -70,7 +70,7 @@ These apply to every change made by an agent, including Grok. They exist because
 - The HTTP client does not schedule, does not know about depth, scope, robots, or the frontier, and does not follow redirects.
 - The HTML link extractor does not fetch and does not decide scope.
 - Reporters receive a finished `CrawlResult`. They do not crawl, filter, deduplicate, or re-sort pages.
-- The engine does not write to stdout and does not write files. Logs go to the injected logger, which writes to stderr by default.
+- The engine does not write to stdout and does not write files. Logs go to the injected logger, which writes to stderr by default. Trace is an injected sink. The engine does not call `console.error` for it.
 - Do not wrap worker code in a catch-all that turns unknown exceptions into page failures. Only errors classified in [Error taxonomy](#error-taxonomy) become page records. Anything else is a fatal error.
 - The robots manager never acquires a lease and never calls `fetch`. It uses the worker's current lease and the injected HTTP client. Only the worker that actually performs the `robots.txt` fetch calls `beforeAttempt` for that fetch. Waiters on the cached promise do not.
 - Do not implement a second robots matcher. `robots-parser` is the only allow and crawl-delay implementation.
@@ -119,11 +119,12 @@ One crawl owns one frontier. The frontier is a FIFO queue plus a `seen` map from
 Each link from a page at depth `d` is handled in this order. The first rule that matches decides the outcome.
 
 1. Resolve with `new URL`. If it throws, ignore the link. If the resolved URL has a username or password, ignore it. If the scheme is not `http` or `https`, ignore it. Otherwise canonicalize. Invalid input never becomes a `seen` entry and never becomes a page failure.
-2. The key is already in `seen`: ignored. No new record. This is the deduplication rule.
+2. The key is already in `seen`: ignored. No new record. This is the URL-key rule. A repeated body is a different rule, in Content identity.
 3. The origin differs from the start origin: one record, `skipped` / `other-origin`. Not fetched.
 4. `d + 1 > maxDepth`: one record, `skipped` / `depth-limit`. Not fetched.
-5. `maxPages` records are already reserved: one record, `skipped` / `page-limit`. Not fetched.
-6. Otherwise reserve: create a record with state `queued` and depth `d + 1`, and push it onto the queue.
+5. The key trips a crawler-trap guard: one record, `skipped` with that guard's reason. Not fetched, and not a reservation. The start URL is reserved before this step and is never trap-skipped.
+6. `maxPages` records are already reserved: one record, `skipped` / `page-limit`. Not fetched.
+7. Otherwise reserve: create a record with state `queued` and depth `d + 1`, and push it onto the queue.
 
 Every created record, skipped or reserved, enters `seen`, so each canonical key has at most one `PageResult`.
 
@@ -141,6 +142,18 @@ Every created record, skipped or reserved, enters `seen`, so each canonical key 
 - `maxPages` must be a positive integer. There is no unlimited value. `Infinity` is rejected.
 - The CLI must pass `0` through. A missing flag uses the default. A present `0` stays `0`.
 
+### Crawler-trap guards
+
+`maxPages` limits how many URLs are reserved. These three limits drop a discovered URL before it takes a slot. Each is a positive integer. `0` is a `ConfigError`. The check uses the canonical key, after the URL-key, origin, and crawl-depth steps, and before the `maxPages` step. The first matching guard wins.
+
+- `maxUrlLength` is the maximum JavaScript string length of the canonical key. A longer key is `skipped` / `url-length`.
+- `maxPathDepth` counts path segments. Split the key's path on `/` and drop the leading empty string. Count what remains, including empty segments between slashes. `/` is 0, `/a/b` is 2, and `/a//b` is 3. The query is not part of the count. A count above the limit is `skipped` / `path-depth`.
+- `maxSegmentRepeats` is how many times one non-empty segment may occur in that same list. Comparison is exact and case-sensitive. A segment that occurs more times is `skipped` / `repeated-segment`. `/a/b/a` is allowed when the limit is 2. `/a/a/a` is not.
+
+The start URL is reserved first and fetched even when its key would trip a guard. A discovered URL that trips a guard enters `seen`, is not fetched, and does not count toward `maxPages`.
+
+A redirect hop uses the same three checks after the off-origin, loop, and duplicate checks, and before robots. A hop that trips a guard is not requested. The record is `skipped` with that reason, keeps the attempts and the last response status, and keeps `finalUrl` as the last URL requested. The hop key is stored in `seen` as an alias of this record and does not take another `maxPages` slot.
+
 ### Defaults
 
 | Field | Default |
@@ -156,6 +169,13 @@ Every created record, skipped or reserved, enters `seen`, so each canonical key 
 | `retryBaseDelayMs` | `500` |
 | `respectRobots` | `true` |
 | `userAgent` | `WebcrawlerBot/1.0 (+https://github.com/Lazzar19/webcrawler)` |
+| `maxDurationMs` | `null` |
+| `maxTotalAttempts` | `null` |
+| `maxUrlLength` | `2048` |
+| `maxPathDepth` | `16` |
+| `maxSegmentRepeats` | `2` |
+| `dedupeContent` | `true` |
+| `respectCanonical` | `true` |
 
 Fixed constants, not configuration: retry delay cap 5000 ms, crawl-delay cap 10 seconds, redirect hop limit 5, `robots.txt` size limit 500 KiB.
 
@@ -174,18 +194,29 @@ Fixed constants, not configuration: retry delay cap 5000 ms, crawl-delay cap 10 
 | `--per-origin` | `perOriginLimit` |
 | `--min-interval` | `minIntervalMs` |
 | `--timeout` | `timeoutMs` |
+| `--max-duration` | `maxDurationMs` |
+| `--max-attempts` | `maxTotalAttempts` |
+| `--max-url-length` | `maxUrlLength` |
+| `--max-path-depth` | `maxPathDepth` |
+| `--max-segment-repeats` | `maxSegmentRepeats` |
 | `--user-agent` | `userAgent` |
 | `--no-respect-robots` | `respectRobots: false` |
+| `--no-dedupe-content` | `dedupeContent: false` |
+| `--no-canonical` | `respectCanonical: false` |
 | `--format` | reporter format, not a config field |
 | `--output` | file path, not a config field |
+| `--details` | presentation flag, not a config field |
+| `--trace` | presentation flag, not a config field |
 
-- `--no-respect-robots` takes no value. When it is absent, `respectRobots` is omitted and the default stays `true`.
+- `--no-respect-robots`, `--no-dedupe-content`, and `--no-canonical` take no value. When the flag is absent, that field is omitted and the default stays `true`.
+- `--details` and `--trace` take no value. They are `type: "boolean"` in `parseArgs`. A form with a value, such as `--details=true` or `--trace=1`, is a `ConfigError`. When the flag is absent, the field is false. Neither flag is passed to `createCrawlConfig`, and neither appears in `CrawlResult.config`.
 - Zero positionals leaves `startUrl` empty for the validation step. A second positional is a `ConfigError`.
 - An unknown flag, or a flag that requires a value and has none, is a `ConfigError`. The parser does not accept a second name for the same option.
 - Validation reads that result and calls `createCrawlConfig`. A numeric flag must be one or more digits. `0` becomes the number 0 and is passed in, so the default does not replace it. Any other spelling is a `ConfigError`. `createCrawlConfig` then applies the URL rule and the positive or non-negative rule. `--format` and `--output` stay beside the config and are not checked here.
 - The runner accepts `--format` `console` (the default when the flag is absent), `json`, or `csv`. Any other value is a `ConfigError` and exit `2`, before a crawl.
+- `--details` is valid only with console output. `--format json --details` and `--format csv --details` are a `ConfigError` and exit `2`, before a crawl. `--trace` is valid with every format. `--details` with `--output` and the default format is allowed: the file is the same human text as stdout.
 
-An omitted field other than `startUrl` gets the default above. An unknown config key is a configuration error, so a typo cannot silently fall back to a default. Validation: `maxDepth` and `retryCount` and `minIntervalMs` and `retryBaseDelayMs` are non-negative integers. `maxPages`, `concurrency`, `perOriginLimit`, `timeoutMs`, and `maxResponseBytes` are positive integers. `respectRobots` is a boolean. `userAgent` is a non-empty string and must not contain a character in U+0000–U+001F or U+007F. Those bytes are illegal in an HTTP header value, so a `User-Agent` of `Bot\r\nX-Extra: 1` is a `ConfigError` before any fetch. The message is `userAgent must not contain control characters`.
+An omitted field other than `startUrl` gets the default above. An unknown config key is a configuration error, so a typo cannot silently fall back to a default. Validation: `maxDepth` and `retryCount` and `minIntervalMs` and `retryBaseDelayMs` are non-negative integers. `maxPages`, `concurrency`, `perOriginLimit`, `timeoutMs`, and `maxResponseBytes` are positive integers. `maxDurationMs` and `maxTotalAttempts` are `null` or a positive integer. `0` is rejected for both. `maxUrlLength`, `maxPathDepth`, and `maxSegmentRepeats` are positive integers. `0` is rejected for each. `dedupeContent` and `respectCanonical` are booleans. There is no `--max-bytes` flag. `maxResponseBytes` stays the per-response cap, and a total-byte budget is not a config field. `respectRobots` is a boolean. `userAgent` is a non-empty string and must not contain a character in U+0000–U+001F or U+007F. Those bytes are illegal in an HTTP header value, so a `User-Agent` of `Bot\r\nX-Extra: 1` is a `ConfigError` before any fetch. The message is `userAgent must not contain control characters`.
 
 ### Workers and termination
 
@@ -198,7 +229,7 @@ Worker loop:
 3. Acquire the politeness lease for the item's origin (see Politeness).
 4. Check robots at this point, with the lease already held: `robots.check(url, { beforeAttempt: lease.beforeAttempt })`. A disallow is `skipped` / `robots`. An unavailable file is `skipped` / `robots-unavailable`. Neither contributes links. The call site does not move.
 5. If the check allows the URL, run the redirect loop (see Redirects). Each page network attempt calls the same lease's `beforeAttempt`.
-6. Classify the response. If it is HTML, extract links.
+6. Classify the response. If it is HTML, read the body, parse links and the raw canonical href, and remember the body hash. Content identity decides, at commit time, whether those links are reserved.
 7. Release the lease.
 8. Commit the item with its links (see Commit order). This always happens, in a `finally`, including after a skip or a classified failure.
 
@@ -221,6 +252,34 @@ Fatal stop: an exception that is not a classified page failure. The frontier ent
 
 Classified page failures are not fatal-stop. They commit an empty link list and the crawl continues.
 
+### Crawl budget
+
+`maxPages` limits how many URLs are reserved. `timeoutMs` limits one attempt. `maxDurationMs` and `maxTotalAttempts` limit the crawl. `null` means that limit is off. Omitting the flag leaves the default `null`, so an existing crawl does not stop early.
+
+`maxDurationMs` is measured with the injected clock, from the start of `crawl()` to the moment the next attempt would be claimed. Politeness waits and retry backoff that already started count as time. `maxTotalAttempts` counts every claim that starts an HTTP attempt: page fetches, retries, redirect hops, and `robots.txt`. `PageResult.attempts` still counts only that page's own attempts. It does not include `robots.txt`.
+
+The crawl owns a `claimAttempt()` used by every `http.get` before `beforeAttempt` and before a retry sleep. The HTTP client does not decide the budget. The claim is synchronous, before any wait:
+
+- If this stop reason is already `budget`, the claim fails and the count does not change.
+- If `maxTotalAttempts` is set and the count is already at that cap, the claim fails and the frontier stops for `budget`.
+- If `maxDurationMs` is set and `clock.now() - startedAt` is already at or past it, the claim fails and the frontier stops for `budget`.
+- Otherwise the count increments by one and the claim succeeds.
+
+A failed claim does not sleep and does not call `fetch`. A claim that succeeded may finish its politeness wait, its retry sleep, and its `fetch`, including the body, even if the clock passes `maxDurationMs` during that work. The next claim then fails. Two workers cannot both take the last remaining attempt, because the increment happens before the first wait. Several workers may already hold a claimed attempt when the duration cap is crossed. Those attempts finish. That is the overshoot.
+
+`BudgetStop` is the refusal. It is not a `FetchError`, not an `errorKind`, and not fatal-stop. `beforeAttempt` throwing it, or `get` returning because a retry was refused, must not be wrapped as a network error.
+
+What the worker commits:
+
+- No page request has started, including when `robots.txt` was refused or had not been fetched yet. The record is `skipped` / `budget`, with `attempts` 0 and `waitedMs` null. The origin is not `robots-unavailable`. A `robots.txt` response that already completed stays in the cache.
+- A page attempt already failed with a `FetchError`, and the retry claim is refused. The page stays that failure (`timeout`, `connect`, `reset`, or the other retryable kind).
+- A retryable status was returned, and the retry claim is refused. The page is `failed` / `http-status` for that status.
+- The next redirect hop is refused. The record is `skipped` / `budget`. It keeps the attempts and the last response status. `finalUrl` is the last URL that was requested. No further hop is requested.
+
+The frontier stores the first stop reason. `SIGINT` uses `interrupted`. The budget uses `budget`. A later signal does not replace the first reason. Fatal-stop still rejects with the original exception and does not return a `budget` result. After a budget stop, `take()` hands out nothing, queued records stay `queued`, and a commit reserves nothing. The process exits `0`.
+
+There is no `maxTotalBytes`. `maxResponseBytes` remains the only byte cap.
+
 ### Commit order
 
 Workers finish in network order, which changes from run to run. Links are therefore reserved in dequeue order, not finish order.
@@ -230,7 +289,7 @@ Workers finish in network order, which changes from run to run. Links are theref
 - The frontier keeps `nextCommit`. While the buffer holds `nextCommit`, it removes that entry, applies the reservation rules to its links, and increments `nextCommit`.
 - Skipped and failed items are committed with an empty link list. A sequence number that is never committed stalls the crawl, which is why step 8 runs in `finally`.
 - A commit marks its sequence number committed before it applies reservations. An exception during reservation then cannot cause the `finally` to commit the same number twice.
-- Stopping rule. Once the crawl is stopping, after a SIGINT or a fatal-stop, every commit still removes its entry and advances `nextCommit`, but it reserves nothing. The rule depends on when the commit happens, not on when the page finished. A page that finished before the stop but was still waiting in the buffer reserves nothing when it commits after the stop.
+- Stopping rule. Once the crawl is stopping, after a SIGINT, a budget stop, or a fatal-stop, every commit still removes its entry and advances `nextCommit`, but it reserves nothing. The rule depends on when the commit happens, not on when the page finished. A page that finished before the stop but was still waiting in the buffer reserves nothing when it commits after the stop. A budget stop does not start a new attempt. A SIGINT still lets the current item finish its retry loop. See Crawl budget.
 
 Because the queue is FIFO and commits happen in dequeue order, the crawl is breadth-first. A key is always first discovered at its smallest depth. The same responses produce the same records in the same order for any `concurrency`. Fetching stays concurrent. Only reservation waits.
 
@@ -242,9 +301,26 @@ The HTTP client does not follow redirects. The worker runs the redirect loop bec
 - If the hop leaves the start origin, the record is `skipped` / `redirect-off-origin`. The off-origin URL is not requested.
 - If the hop key equals the record's own key or an earlier hop in this chain, the record is `failed` / `redirect-loop`.
 - If the hop key is already in `seen` and owned by another record, this record is `skipped` / `duplicate`. That URL is not requested here. The other record owns it.
+- If the hop key trips a crawler-trap guard, the record is `skipped` with that guard's reason. The hop is not requested. The hop key is added to `seen` as an alias owned by this record and does not consume a `maxPages` slot. The record keeps the attempts and the last response status. `finalUrl` stays the last URL requested.
 - Otherwise add the hop key to `seen` as an alias owned by this record. An alias does not consume a `maxPages` slot. Check robots for the hop with the same function as step 4 of the worker loop, passing the same lease `beforeAttempt`. If allowed, request the hop's resolved spelling, with the fragment removed, not the canonical key.
 - More than 5 hops is `failed` / `redirect-limit`. A redirect status without `Location`, or a hop URL with a username or password, is `failed` / `bad-redirect`. The userinfo hop is not requested.
 - `finalUrl` is the last requested URL. Links are resolved against it. The record keeps its original depth and `discoveredFrom`.
+
+### Content identity
+
+URL-key deduplication still happens at reservation. This section is the body. It runs when an HTML record commits, in dequeue order, so two workers cannot disagree about which copy came first. The hash set belongs to that crawl. `node:crypto` SHA-256 is the hash. No new package. The input is the decoded body string encoded as UTF-8. An empty body has a hash. A non-HTML response, a failed page, and a page whose parser throws do not enter the set.
+
+The parser still does not fetch. It returns the link list as it does today, and the raw `href` of the first `<link>` whose `rel` tokens include `canonical`, compared without case. Later canonical links are ignored. A missing tag yields no href. The `links` trace count stays the number of links.
+
+`respectCanonical` resolves that href with the same document base as links. A value that does not parse, has a username or password, is not `http` or `https`, or has another origin is ignored. A key equal to this record's key is ignored. Any other key is a declared canonical.
+
+On commit, the first matching rule decides:
+
+1. `dedupeContent` is true and this hash is already stored. The record is `skipped` / `duplicate-content`. It keeps the status, content type, byte length, and attempts of the fetch. No links are reserved, and a canonical target is not reserved.
+2. `respectCanonical` is true and the page declares a canonical key. Store this hash when `dedupeContent` is true. The record is `skipped` / `canonical` and keeps the fetch fields above. Its own links are not reserved. If the canonical key is not in `seen`, discover it through the reservation steps at the same depth as this record, with `discoveredFrom` set to this record's key. The depth check for that discovery is `depth > maxDepth`, not `depth + 1 > maxDepth`. Origin, trap, and `maxPages` then apply as usual. A key already in `seen` is not reserved again.
+3. Otherwise store this hash when `dedupeContent` is true, and reserve the page's links as usual.
+
+`--no-dedupe-content` leaves the hash unused, so step 1 does not fire. `--no-canonical` leaves the tag unused, so step 2 does not fire. With both flags, a crawl reserves links the way it did before this section. The stopping rule still reserves nothing after a stop, including a canonical target.
 
 ### Politeness
 
@@ -266,9 +342,9 @@ The HTTP client does not follow redirects. The worker runs the redirect loop bec
 
 `queued`, `fetching`, `ok`, `skipped`, `failed`.
 
-`fetching` is transient. A finished result does not contain it: in-flight work reaches `ok`, `skipped`, or `failed` before the result is returned. `queued` appears in a result only after an interrupt. If a `fetching` record is still present, the console reporter prints it and does not throw. A throw there would replace the partial crawl with a fatal report error.
+`fetching` is transient. A finished result does not contain it: in-flight work reaches `ok`, `skipped`, or `failed` before the result is returned. `queued` appears in a result only after an interrupt or a budget stop. If a `fetching` record is still present, `--details` prints a row for it and the summary does not throw. A throw there would replace the partial crawl with a fatal report error. The summary does not add a seventh count for it.
 
-Skip reasons: `other-origin`, `redirect-off-origin`, `depth-limit`, `page-limit`, `duplicate`, `robots`, `robots-unavailable`, `non-html`.
+Skip reasons: `other-origin`, `redirect-off-origin`, `depth-limit`, `page-limit`, `duplicate`, `robots`, `robots-unavailable`, `non-html`, `budget`.
 
 A skipped or failed URL is a record in the result. It is not a successful page. The old `pages` map that stored a hit count is retired. Inbound link counts are out of scope.
 
@@ -287,6 +363,8 @@ One module owns `fetch`. It is created with injected dependencies: `createHttpCl
 - It returns `{ url, statusCode, contentType, location, body, byteLength, attempts, durationMs }`, or throws a `FetchError` with `kind` and `attempts`.
 - An HTTP status is never thrown. A 4xx or 5xx response is returned after retries are exhausted, and the crawler classifies it.
 - `get` does not return `undefined`. `retryCount` must be a non-negative integer. Any other value throws `Error` `retryCount must be a non-negative integer` before an attempt. If the attempt loop ends without a response or a `FetchError`, `get` throws `Error` `HTTP client ended without a response`. That error is not a page failure. The worker's existing catch treats it as fatal-stop.
+- `trace` on the client is optional and defaults to a no-op. It is used only for `attempt-start` and `retry` in Trace. Omitting it changes no fetch behavior.
+- `get` calls the crawl's `claimAttempt()` once per attempt it intends to start, before a retry sleep and before `beforeAttempt`. A refusal throws `BudgetStop` when this `get` has not started an attempt, or returns the last response, or rethrows the last `FetchError`, as Crawl budget specifies. `BudgetStop` is not retried and is not wrapped as a `FetchError`.
 
 ### Retries
 
@@ -348,42 +426,180 @@ The file is `${origin}/robots.txt`. The product token is the configured `userAge
 
 ### Output and shutdown
 
-- The engine returns a `CrawlResult`. Reporters format it. The engine does not write files and does not choose a Desktop path.
+- The engine returns a `CrawlResult`. Reporters format that result. The engine does not write to stdout and does not choose a filesystem path.
+- `--details` and `--trace` change presentation only. They do not change URL policy, reservation order, concurrency, robots, retries, or the contents of `CrawlResult`.
 - There is no Desktop report. `printReport`, `getDesktopPath`, `saveToCSV`, and `sortPages` are gone. Nothing writes a CSV because the platform looks like Windows, WSL, or macOS. A file is written only when the CLI is given `--output`.
-- Formats: console summary, JSON, and CSV. CSV is the machine table, not the human report. Its quoting covers commas, quotes, and newlines. Its columns are the `PageResult` fields in contract order. `null` is an empty cell. JSON is `CrawlResult` with no extra fields.
-- The console summary is the default human report. It replaces the one-line `Crawled N pages, ...` string and the old `Found N links to page ...` lines. Pages stay in creation order. There is no hit-count sort. A `null` field is omitted, not printed as `null`.
-- The summary is exactly these lines, with a blank line between the three blocks. Counts are always printed, including zeros.
-
-```text
-completed https://example.com/ 840ms
-reserved 4 fetched 2 ok 1 skipped 2 failed 1 queued 0
-
-ok 200 https://example.com/ depth 0
-skipped https://example.com/secret depth 1 robots
-failed 404 https://example.com/missing depth 1 http-status HTTP 404
-skipped https://example.com/notes.txt depth 1 non-html
-queued https://example.com/later depth 1
-
-robots https://example.com allow-all 404
-```
-
-- Line 1 is `{stopReason} {startUrl} {durationMs}ms`.
-- Line 2 is the six counts in that order: `reserved`, `fetched`, `ok`, `skipped`, `failed`, `queued`.
-- Then one line per page, in `pages` order:
-  - `ok {statusCode} {canonicalUrl} depth {depth}`
-  - `skipped {canonicalUrl} depth {depth} {skipReason}`
-  - `failed {statusCode} {canonicalUrl} depth {depth} {errorKind} {errorMessage}` when `statusCode` is not null. When it is null, omit it: `failed {canonicalUrl} depth {depth} {errorKind} {errorMessage}`
-  - `queued {canonicalUrl} depth {depth}`
-  - `fetching {canonicalUrl} depth {depth}` when a record is still in that transient state. The counts line does not grow a seventh field.
-- When `finalUrl` is not null and is not `requestedUrl`, append `final {finalUrl}` to that page line. That is how a redirect stays visible. `discoveredFrom`, `waitedMs`, `contentType`, `byteLength`, and `attempts` stay in JSON and CSV. They are not on the console line.
-- Then one line per robots entry, in result order: `robots {origin} {outcome} {statusCode}`. Append `{errorKind}` only when it is not null. Omit `{statusCode}` when it is null.
-- stdout carries one artifact. With `--format console` (the default), the summary goes to stdout. With `--format json` or `csv` and no `--output`, that format goes to stdout and the summary goes to stderr. With `--output`, the chosen format is written to that path, and the summary goes to stdout.
+- Formats: console summary, JSON, and CSV. CSV is the machine table, not the human report. Its quoting covers commas, quotes, and newlines. Its columns are the `PageResult` fields in contract order. `null` is an empty cell. JSON is `CrawlResult` with no extra fields. Trace fields are not added to either format.
+- The one-line-per-page console listing is retired. The default human report is the summary below. Complete page rows stay in `--details`, JSON, and CSV.
 - JSON is `JSON.stringify` of the `CrawlResult` with a two-space indent and a trailing newline. It adds no fields.
 - The CSV's first row is the `PageResult` field names in contract order. Each later row is one page. `null` is an empty cell. A cell that contains a comma, a quote, or a newline is wrapped in quotes, and each quote inside it is doubled.
 - A failed `--output` write prints the error on stderr, does not print the report, and exits `1`.
 - The first SIGINT aborts the crawl signal. In-flight work finishes, the partial result is reported, and the process exits `0`. The second SIGINT exits `130` immediately and does not write the report.
 - The old writer in `backend/src/crawler/report.js` is gone. Reporters live under `backend/src/report/` and do not choose a path.
 - On the first SIGINT, stop handing out queued items, let in-flight items finish including their retries, reserve nothing from any commit after the signal (the stopping rule in Commit order), write the partial `CrawlResult` with `stopReason: "interrupted"`, and exit `0`. A second SIGINT exits `130` immediately without writing.
+
+#### Streams
+
+Trace is never written to stdout. `node backend/src/main.js https://example.com --format json --trace > result.json` must leave only the JSON artifact in `result.json`.
+
+| Situation | stdout | stderr | file |
+|---|---|---|---|
+| Default console | summary | empty unless a fatal error occurs | none |
+| `--details` | summary, then the page table | empty unless a fatal error occurs | none |
+| `--format json` | JSON only | summary | none |
+| `--format csv` | CSV only | summary | none |
+| `--format json --trace` | JSON only | summary, then trace | none |
+| `--format csv --trace` | CSV only | summary, then trace | none |
+| `--output report.json` | summary | empty | the chosen format |
+| `--output report.json --trace` | summary | trace only | the chosen format |
+| `--output report.txt --details` | summary, then the page table | trace when `--trace` is set | the same human text as stdout |
+| configuration error | empty | error message | none |
+| crawl or output failure | empty | error message | none |
+
+With `--output`, the summary stays on stdout. It is not copied to stderr. `--details` does not create a fourth format. When the format is `json` or `csv`, the file is that artifact and the summary is still the human text on stdout.
+
+#### Console summary
+
+The default console format does not print one line per page.
+
+Sections, in this order, with a blank line between blocks:
+
+1. Completion line: `{stopReason} {startUrl} {durationMs}ms`. `stopReason` is `completed`, `interrupted`, or `budget`. A fatal error does not print a summary.
+2. The `crawl` count block. These six numbers are `CrawlResult.counts` as stored. The reporter does not recompute them. Zero is printed.
+3. A `skipped` block, only when at least one page has `state === "skipped"` and `skipReason !== null`.
+4. A `failed` block, only when at least one page has `state === "failed"` and `errorKind !== null`.
+5. A `robots` block, only when `result.robots` is not empty.
+
+`skipped` and `failed` are presentation maps. They are not fields on `CrawlResult`. Count a skipped page by `skipReason`, and a failed page by `errorKind`. Drop a null reason or kind from the map. An unknown string is shown, not dropped. Sort entries by descending count, then by ascending name.
+
+Within one count block, labels are left-aligned to the longest label in that block and counts are right-aligned to the widest count in that block. The indent is two spaces. Two spaces separate the label and the count. The labels in the crawl block are `reserved`, `fetched`, `ok`, `skipped`, `failed`, `queued`, in that order.
+
+A robots line is not a count row. Indent two spaces, then `{origin}`, two spaces, `{outcome}`, then ` {statusCode}` when status is not null, then ` {errorKind}` when the kind is not null. One origin per line, in result order.
+
+```text
+completed https://example.com/ 840ms
+
+crawl
+  reserved  12
+  fetched    8
+  ok         5
+  skipped    6
+  failed     1
+  queued     0
+
+skipped
+  depth-limit   3
+  other-origin  2
+  robots        1
+
+failed
+  http-status  1
+
+robots
+  https://example.com  allow-all 404
+```
+
+In that example the crawl labels pad to `reserved` and the counts pad to `12`. The skipped labels pad to `other-origin`.
+
+#### Details
+
+`--details` prints the summary, a blank line, then a `pages` table. It does not replace the summary. Rows follow `result.pages`. The reporter does not sort or deduplicate them.
+
+Columns, left-aligned, separated by two spaces, with a two-space indent:
+
+| Column | Width | Cell |
+|---|---|---|
+| `STATE` | 8 | `ok`, `skipped`, `failed`, `queued`, or `fetching` |
+| `STATUS` | 6 | the status number for `ok` or `failed` when `statusCode` is not null, otherwise `-` |
+| `DEPTH` | 5 | `page.depth` |
+| `URL` | the longer of `3` and the longest display URL in this table | display form of `page.canonicalUrl` |
+| `REASON` | unpadded | `-` for `ok`, `queued`, and `fetching`; `skipReason` or `-` for `skipped`; `errorKind` or `-` for `failed` |
+
+`errorMessage` is not a column. A redirect target is not a second line. Both stay in JSON, CSV, and trace.
+
+`canonicalUrl`, `requestedUrl`, JSON, and CSV stay complete. Only this table may shorten a URL, and the function is not allowed to read the terminal width.
+
+- If `url.length <= 64`, print it unchanged.
+- Otherwise take `new URL(url).origin`. The marker is `...`.
+- If `origin.length + 3 >= 64`, print `origin` plus `...`.
+- Otherwise `budget = 64 - origin.length - 3`, `head = ceil(budget / 2)`, `tail = budget - head`. The rest is `url` after the origin. Print `origin`, the first `head` characters of the rest, `...`, and the last `tail` characters of the rest.
+
+When any row was shortened, print this line after the table:
+
+```text
+URLs may be shortened for terminal display; use --format json or --format csv for complete values.
+```
+
+Omit that line when every URL fit.
+
+```text
+pages
+  STATE     STATUS  DEPTH  URL                            REASON
+  ok        200     0      https://example.com/           -
+  skipped   -       1      https://example.com/private    robots
+  failed    404     1      https://example.com/missing    http-status
+  skipped   -       1      https://example.com/notes.txt  non-html
+```
+
+#### Trace
+
+`--trace` writes diagnostic lines to stderr through one injected sink. It is not produced by replaying `CrawlResult` after the fact. The default sink is a no-op, so a crawl that does not pass `trace` does not print these lines.
+
+`crawl(config, { httpClient, clock, logger, signal, trace })`. `createHttpClient` takes the same `trace` and may emit only `attempt-start` and `retry`. The client still does not know depth, robots, or the frontier. Every other event is emitted by the frontier or the worker. The sink is called as `trace(event, fields)` and is not awaited. A throw from the sink is caught, logged once, and ignored. It does not change a page record, and it does not replace the crawl's rejection.
+
+A line is `[trace] {event}` plus ` {key}={value}` pairs in a fixed order per event. A value that matches `^[A-Za-z0-9._:/-]+$` is printed raw. Any other value is JSON-quoted after CR and LF are replaced with a space. A URL with a username or password is rewritten to that origin's URL with the username `***` and an empty password before it is printed. Trace fields are an allow-list. Response bodies, `Cookie`, and `Authorization` are not fields.
+
+| Event | When | Fields |
+|---|---|---|
+| `crawl-start` | once, after config validation, before workers | `url` |
+| `reserved` | a queued record is created, including the start URL | `url`, `depth`, `reason` (`start` or `discovered`) |
+| `skipped` | a record is created already skipped (`other-origin`, `depth-limit`, `page-limit`, `url-length`, `path-depth`, `repeated-segment`) | `url`, `reason` |
+| `take` | `take()` hands an item to a worker | `url`, `depth`, `sequence` |
+| `robots-check` | the worker's `robots.check` returns, including a hop | `url`, `allowed` (`true` or `false`), and `reason` when not allowed |
+| `attempt-start` | the HTTP client is about to call `fetch`, after `beforeAttempt` | `url`, `attempt` (1-based) |
+| `retry` | a retry wait is about to start | `url`, `next` (the upcoming attempt), `wait` (milliseconds), and `status` or `kind` |
+| `redirect` | a hop will be requested | `from`, `to`, `status` |
+| `links` | `extractLinks` returned | `url` (the final URL), `discovered` (that return value's length) |
+| `commit` | the first `commit` of an item, after its reservations | `sequence`, `state` |
+| `fatal` | the first `frontier.fail` | `message` (one line) |
+| `crawl-stop` | once, after the workers return, including before a fatal rejection | `reason` (`completed`, `interrupted`, `budget`, or `fatal`) |
+
+A duplicate discovery emits nothing. A reserved page that later becomes `skipped` / `robots` does not emit `skipped`; its `commit` line carries `state=skipped`. The idempotent second `commit` emits nothing. `retry` is not emitted when the response is returned because the wait would exceed 5000 ms. `redirect` is not emitted for a hop that is not requested. `links` is not emitted when extraction throws.
+
+Child `reserved` and `skipped` lines are produced while the parent commit reserves links, and the parent's `commit` line follows them.
+
+Events from one worker stay in this order. Other workers may interleave.
+
+```text
+take -> robots-check -> attempt-start / retry / redirect / robots-check -> links, or the page ends without links -> commit
+```
+
+A page refused by robots before its own request:
+
+```text
+take -> robots-check -> commit
+```
+
+A fatal error:
+
+```text
+take -> fatal -> commit -> crawl-stop reason=fatal -> the original rejection
+```
+
+`crawl-stop` is one line. Trace is not a stable API. Scripts use JSON or CSV.
+
+```text
+[trace] crawl-start url=https://example.com/
+[trace] reserved url=https://example.com/ depth=0 reason=start
+[trace] take url=https://example.com/ depth=0 sequence=0
+[trace] robots-check url=https://example.com/ allowed=true
+[trace] attempt-start url=https://example.com/ attempt=1
+[trace] links url=https://example.com/ discovered=3
+[trace] reserved url=https://example.com/about depth=1 reason=discovered
+[trace] skipped url=https://external.example/ reason=other-origin
+[trace] commit sequence=0 state=ok
+[trace] crawl-stop reason=completed
+```
 
 ### Result shapes
 
@@ -411,17 +627,17 @@ No report-only fields.
 
 - `schemaVersion`: `1`.
 - `startUrl`, `startedAt` and `finishedAt` as ISO strings from the injected clock, `durationMs`.
-- `stopReason`: `completed` or `interrupted`.
+- `stopReason`: `completed`, `interrupted`, or `budget`.
 - `config`: the effective configuration.
 - `pages`: records in creation order, which commit order makes stable.
 - `robots`: one entry per origin with `origin`, `statusCode`, `outcome` (`parsed`, `allow-all`, `unavailable`, `not-checked`), and `errorKind`.
-- `counts`: `reserved`, `queued` (non-zero only after an interrupt), `fetched` (records with `attempts >= 1`), `ok`, `skipped`, `failed`.
+- `counts`: `reserved`, `queued` (non-zero only after an interrupt or a budget stop), `fetched` (records with `attempts >= 1`), `ok`, `skipped`, `failed`.
 
 ### Dependency injection
 
 Inject only what tests need to replace.
 
-- `crawl(config, { httpClient, clock, logger, signal })`. `config` is a plain object that includes `startUrl` and is validated as in Defaults. Each dependency defaults to the real implementation, so `crawl({ startUrl, ... })` with no second argument is a valid call.
+- `crawl(config, { httpClient, clock, logger, signal, trace })`. `config` is a plain object that includes `startUrl` and is validated as in Defaults. Each dependency defaults to the real implementation, so `crawl({ startUrl, ... })` with no second argument is a valid call. `trace` defaults to a no-op. The CLI passes a stderr writer only when `--trace` is set.
 - `clock` is `{ now(), sleep(ms) }`. Do not add a signal argument to `sleep`. Fatal-stop cancellation is `Promise.race` against an internal abort created inside `crawl()`, tripped only by `frontier.fail`. The HTTP client and the gate receive that abort. SIGINT does not trip it.
 - Every time measurement and every delay in the engine, HTTP client, and politeness gate goes through the clock. Unit tests use a fake clock. Integration tests may use the real clock with `minIntervalMs` and `retryBaseDelayMs` set to small values.
 - `logger` is `{ debug, info, warn, error }` and writes to stderr by default.
@@ -469,7 +685,7 @@ Integration tests use a real server, not a `fetch` mock.
 
 ## Current Status
 
-**Active milestone:** Milestone 5 - Optional image. The checklist is complete. The image runs the fixture demo as a non-root user.
+**Active milestone:** Milestone 6 - Terminal output. Milestones 0–5 are complete. The console still prints one line per page until this milestone lands.
 
 **Known behavior of the code today:**
 
@@ -492,6 +708,10 @@ Integration tests use a real server, not a `fetch` mock.
 - `[x]` A file is written only for `--output`. There is no guessed Desktop path. Console, JSON, and CSV keep `pages` in creation order.
 - `[x]` Node is pinned to 24, and ESLint checks `backend/`.
 - `[x]` `docker build -t webcrawler .` then `docker run --rm webcrawler` runs the fixture demo. The image uses Node 24, a non-root user, and a deps stage that is not the runtime. The repository does not publish the image.
+- `[ ]` The default console is still one line per page. Milestone 6 replaces that with the summary, `--details`, and `--trace` in Output. JSON and CSV stay as they are.
+- `[ ]` There is no crawl budget. `maxDurationMs` and `maxTotalAttempts` are not config fields yet. Milestone 7 adds them. Every non-fatal stop is still `interrupted`.
+- `[ ]` There are no crawler-trap guards. Milestone 8 adds URL length, path depth, and repeated segments.
+- `[ ]` A repeated HTML body is fetched and its links are reserved. A `rel=canonical` href is not read. Milestone 9 adds both.
 
 ## Milestones
 
@@ -600,7 +820,9 @@ The console summary in Output is not part of this milestone.
 - `[x]` On SIGINT, stop handing out items, finish in-flight work, and emit the partial result.
 - `[x]` Test the CLI as a child process against the fixture: bad arguments, explicit `0`, JSON shape, JSON on stdout being parseable, CSV escaping, and a crawl that includes a failed page.
 
-**Done when:** `node backend/src/main.js` against the fixture prints the console summary from Output, a stranger can see which pages were fetched, skipped, and failed, no CSV is written to a Desktop path, and JSON matches the result shape.
+**Done when:** `node backend/src/main.js` against the fixture prints a human report, a stranger can see which pages were fetched, skipped, and failed, no CSV is written to a Desktop path, and JSON matches the result shape.
+
+The page listing this milestone shipped (`ok 200 {url} depth {depth}`) is retired by Milestone 6. Do not restore it.
 
 ### Milestone 4 - CV cutoff
 
@@ -625,24 +847,79 @@ Not required for the CV cutoff. Do this only after Milestone 4.
 - `[x]` Document `docker run` for the same fixture demo.
 - `[x]` Keep publishing, registry credentials, and image scanners out of this repository.
 
-## Frozen
+### Milestone 6 - Terminal output
 
-Not in this plan, and not a follow-up milestone until the CV cutoff is done and a later project actually needs them:
+**Goal:** `npm start` and `node backend/src/main.js <url>` are readable before anyone asks for a page list.
 
-- React or any other UI
-- HTTP API, job service, OpenAPI, SSRF surface
-- HTML report as the showcase
-- Release automation, npm publish, image registries
-- Sitemap crawling, SEO extraction, a drawn crawl graph, persistent resume, SQLite
-- Distributed workers, browser automation, cookie auth, proxy rotation
-- TypeScript, a type checker, or an ESM migration
+The contract is Output. Part A is reporters and CLI flags. Part B is the trace sink. Do not start Part B until Part A is green. Trace must not be built by printing `CrawlResult` at the end.
 
-Future work after the cutoff, recorded so it is not mistaken for missing scope:
+Part A, summary and details:
+
+- `[ ]` Replace the one-line page listing with the console summary. Counts come from `CrawlResult.counts`. Skip and failure blocks are reporter-derived, omit empty blocks, and sort by count then name.
+- `[ ]` Add `--details`. Print the summary, then the page table in `pages` order, with the column widths and the 64-character URL rule. Print the shortened-URL note only when a row was shortened.
+- `[ ]` Reject `--format json --details` and `--format csv --details` as a `ConfigError` before a crawl. Reject `--details=true` and `--trace=1`.
+- `[ ]` Follow the stream table, including `--output` with and without `--trace` and `--details`.
+- `[ ]` Rewrite the console assertions in the reporter, CLI, and demo tests. Default stdout has the crawl counts and does not list page URLs. `--details` lists them in order. JSON and CSV keep the full URL.
+- `[ ]` Update the README console sample and add the three commands in Output's verification list.
+
+Part B, trace:
+
+- `[ ]` Add the `trace` sink to `crawl()` and the HTTP client. Default no-op. The CLI writes stderr only when `--trace` is set.
+- `[ ]` Emit the event table, including `fatal` and `crawl-stop`. A record created already skipped emits `skipped` and does not emit `take` or `commit`. A reserved page that robots skips emits `commit` with `state=skipped` and does not emit a second `skipped`.
+- `[ ]` Quote values with the character rule. Redact userinfo. Do not emit bodies, cookies, or authorization.
+- `[ ]` Catch a sink throw, log it, and leave the crawl result or the original rejection in place.
+- `[ ]` Lock local event order with `concurrency: 1`. Lock that `--format json --trace` leaves parseable JSON on stdout and trace on stderr only.
+
+**Done when:** a default crawl prints the summary and no page URL list. `--details` adds the table. `--format json --details` exits `2`. `--format json --trace > result.json` is valid JSON, and the trace is only on stderr. `npm run verify` is green. The README shows the plain command, `--details`, and `--format json --trace`.
+
+### Milestone 7 - Crawl budget
+
+**Goal:** A crawl can stop because it ran long enough, or because it made enough HTTP attempts, without looking like Ctrl+C or a crashed page.
+
+The contract is Crawl budget. Do this after Milestone 6. Do not add `maxTotalBytes`.
+
+- `[ ]` Add `maxDurationMs` and `maxTotalAttempts` to config, default `null`. `null` or a positive integer. `0` is a `ConfigError`. Wire `--max-duration` and `--max-attempts`. Do not add `--max-bytes`.
+- `[ ]` Add synchronous `claimAttempt()`. The HTTP client calls it before a retry sleep and before `beforeAttempt`. A refused claim does not fetch. `BudgetStop` is not a `FetchError` and not fatal-stop.
+- `[ ]` Store the first stop reason. Budget sets `stopReason` to `budget` and exits `0`. SIGINT still sets `interrupted`. A later signal does not replace the first reason.
+- `[ ]` A page that never starts a request is `skipped` / `budget`, with `attempts` 0. A refused `robots.txt` fetch does not mark the origin `robots-unavailable`. A refused retry keeps the failure or `http-status` already earned. A refused hop is `skipped` / `budget` and keeps the last response.
+- `[ ]` After the stop, leave queued records queued and reserve nothing from later commits. A claimed attempt may finish past the duration cap. Two workers cannot both claim the last remaining attempt.
+- `[ ]` Tests with a fake clock: duration stops the next claim; one started attempt finishes; `maxTotalAttempts: 1` with robots on fetches `robots.txt` and does not fetch the page; `respectRobots: false` uses that one attempt for the page; omitted budgets do not stop the crawl; `PageResult.attempts` still excludes `robots.txt`.
+
+**Done when:** a crawl with no budget flags matches today's limits. A duration or attempt cap returns a result with `stopReason` `budget` and exit `0`. Ctrl+C is still `interrupted`. `npm run verify` is green.
+
+### Milestone 8 - Crawler-trap guards
+
+**Goal:** A calendar path, a repeated segment, or a very long URL is skipped before it takes a `maxPages` slot.
+
+The contract is Crawler-trap guards. Do this after Milestone 7.
+
+- `[ ]` Add `maxUrlLength`, `maxPathDepth`, and `maxSegmentRepeats` to config, with the defaults in Defaults. `0` is a `ConfigError`. Wire `--max-url-length`, `--max-path-depth`, and `--max-segment-repeats`.
+- `[ ]` Apply the three checks in that order to a discovered key, after crawl depth and before `maxPages`. A hit is `skipped` with `url-length`, `path-depth`, or `repeated-segment`. It enters `seen`, is not fetched, and does not count as a reservation.
+- `[ ]` Fetch the start URL even when its key would trip a guard. Apply the same guards to a redirect hop after the duplicate check and before robots. A refused hop keeps the attempts and the last status.
+- `[ ]` Tests: a key of length `maxUrlLength + 1` is `url-length`; `/a//b` counts the empty segment; the third copy of a segment is `repeated-segment`; a URL inside the defaults is reserved as today; two guards on one key report the earlier reason.
+
+**Done when:** the fixture demo page set is unchanged under the defaults. A tight cap skips the trap URL and still fetches a later URL that fits in `maxPages`. `npm run verify` is green.
+
+### Milestone 9 - Content identity
+
+**Goal:** The same HTML body does not keep feeding the queue, and a declared canonical URL is what the crawl follows.
+
+The contract is Content identity. Do this after Milestone 8. Do not add a body-hash column to `PageResult`. `schemaVersion` stays `1`.
+
+- `[ ]` Add `dedupeContent` and `respectCanonical`, both default `true`. Wire `--no-dedupe-content` and `--no-canonical` as valueless flags.
+- `[ ]` Hash a successful HTML body with `node:crypto` SHA-256 at commit time. The second committed copy is `skipped` / `duplicate-content`, keeps the fetch fields, and reserves no links. A parse failure does not enter the hash set. An empty body does.
+- `[ ]` Read the first `rel=canonical` href. A declared other key makes the fetched page `skipped` / `canonical` and reserves that target at the same depth, subject to origin, traps, and `maxPages`. Ignore a tag that does not parse, has userinfo, is off-origin, or names this record's own key.
+- `[ ]` With `concurrency` greater than 1, the copy that commits first owns the hash. The other becomes `duplicate-content`.
+- `[ ]` Give fixture pages that share a body distinct bodies, or expect `duplicate-content`. With both disable flags, link reservation matches the crawl from before this milestone.
+
+**Done when:** two URLs with the same body produce one fetched page with links and one `duplicate-content` page without them. A canonical tag reserves the target and does not reserve the alias page's other links. Both disable flags leave link reservation unchanged. `npm run verify` is green.
+
+## Future work
+
+Not a current milestone. Implement an item only after it is promoted into Milestones.
 
 - Per-origin queues with a ready-time heap, and retries rescheduled into the frontier instead of holding a worker. Needed only when more than one origin is in scope.
 - Widening an origin's gap after `429`, and retry jitter.
-- Content deduplication by body hash, and `rel=canonical`.
-- Crawler-trap guards beyond `maxPages`: URL length, path depth, repeated segments.
 - `rel=nofollow`, `<meta name=robots>`, and `X-Robots-Tag`.
 - Charset detection beyond UTF-8.
 - A streaming parser in place of `jsdom`.
@@ -657,7 +934,7 @@ Broken-link detection is already implied by failed `PageResult` records. It does
 |---|---|---|
 | Lint | `npm run lint` | No errors in `backend/src` and `backend/tests` |
 | Tests | `npm test` | Backend unit tests and the local HTTP fixture |
-| CLI demo | README command | Fixture crawl prints a summary and exits 0 |
+| CLI demo | README command | Fixture crawl prints the Output summary and exits 0 |
 | CI | GitHub Actions on `main` and pull requests | Lint and tests, Node from `backend/.nvmrc` |
 | Image | `docker build` then the README demo | Only after Milestone 5 |
 
@@ -685,12 +962,40 @@ Keep these boundaries when splitting files. They come from Architecture.md and s
 - The politeness gate owns per-origin leases and gaps. It does not fetch.
 - The HTTP client owns fetch, timeout, retries, byte limits, and error classification. It does not follow redirects or schedule.
 - The robots manager owns fetching, caching, and evaluating `robots.txt` through the HTTP client.
-- The HTML parser returns links and does not fetch.
+- The HTML parser returns links and the raw canonical href. It does not fetch.
 - Reporters format a `CrawlResult` and do not crawl.
 
 Add a file when a boundary above is being violated. Do not add a file only to match a diagram.
 
 ## Learning Log
+
+### 2026-10-12 - Trap guards and content identity
+
+- **Problem:** `maxPages` still spends its slots on calendar paths and repeated URLs. Two URLs with the same HTML both enqueue links. A canonical tag was not part of identity.
+- **Chosen solution:** Milestone 8, after Milestone 7. URL length, path depth, and repeated segments skip a discovered key before it is reserved. The start URL is still fetched. Milestone 9, after Milestone 8. SHA-256 of the decoded body is decided at commit time. The second copy reserves nothing. A `rel=canonical` key is discovered at the same depth, and the alias page's own links are not.
+- **How it was verified:** Read against the reservation order, the redirect hop order, and the fixture pages that reuse one body. No code in this change.
+- **Lesson learned:** A duplicate body has to be decided in commit order. Deciding it when the response arrives would make the winner depend on which worker finished first.
+
+### 2026-10-12 - Future work replaces Frozen
+
+- **Problem:** The Frozen section listed products this repository would not build. That list sat beside the real backlog and made postponed crawler work look out of scope.
+- **Chosen solution:** Remove Frozen. Keep the postponed crawler items as Future work. Current work stays Milestones 6 and 7. An item in Future work is implemented only after it becomes a milestone.
+- **How it was verified:** Read against the milestone list and the agent process rule. No code in this change.
+- **Lesson learned:** The backlog is the next crawler behavior. A ban list is not a milestone.
+
+### 2026-10-12 - Crawl budget
+
+- **Problem:** `maxPages` caps reserved URLs and `timeoutMs` caps one attempt. Retries, redirect hops, `robots.txt`, and politeness waits can keep a crawl running with no whole-crawl cap. A total-byte cap was considered and left out.
+- **Chosen solution:** Milestone 7, after Milestone 6. `maxDurationMs` and `maxTotalAttempts` default to `null`. The clock measures duration. Every HTTP attempt, including `robots.txt`, consumes the attempt budget through a synchronous `claimAttempt()`. The attempt already claimed may finish. The next one does not start. `stopReason` is `budget`, distinct from `interrupted`, and the process exits `0`. A page that never gets a request is `skipped` / `budget`. There is no `maxTotalBytes`.
+- **How it was verified:** Read against the stop reasons and the worker commit rules. No code in this change.
+- **Lesson learned:** A budget stop is a finished crawl. Folding it into Ctrl+C or into a page error hides which limit fired.
+
+### 2026-10-12 - Terminal output contract
+
+- **Problem:** The default console prints one line per page, so the first thing a new user sees is a wall of URLs.
+- **Chosen solution:** Milestone 6. The default report is a summary of counts, skip reasons, failure kinds, and robots. `--details` adds a page table and may shorten URLs for display only. `--trace` is a live stderr sink, not a replay of `CrawlResult`. JSON and CSV are unchanged. `--details` is illegal with `json` and `csv`. A record created already skipped is a `skipped` trace line and is not a `take`. A reserved page that robots refuses is a `commit` with `state=skipped`. Part A lands before Part B.
+- **How it was verified:** Read against the stream table and the event allow-list. No code in this change.
+- **Lesson learned:** A page list is a details view. Putting it on the default stdout made a correct crawl look unfinished.
 
 ### Template
 
@@ -1074,6 +1379,22 @@ Approved: 2026-10-12. The README sections Design decisions and Known limitations
 - **Lesson learned:** A reporter that throws is a second failure mode. The partial crawl has to survive a state the engine is not supposed to emit.
 
 ## Change Log
+
+### 2026-10-12 (Trap guards and content identity)
+
+- Promoted crawler-trap guards to Milestone 8 and body-hash deduplication plus `rel=canonical` to Milestone 9. Both follow Milestone 7. The defaults are on. `PageResult` gains no hash column.
+
+### 2026-10-12 (Future work)
+
+- Removed the Frozen section. Postponed crawler items now live only under Future work. They are not current milestones.
+
+### 2026-10-12 (Crawl budget)
+
+- Specified `maxDurationMs` and `maxTotalAttempts`, default unlimited. A hit stops the crawl with `stopReason` `budget` and exit `0`. Total downloaded bytes stay uncapped.
+
+### 2026-10-12 (Terminal output contract)
+
+- Retired the one-line page listing as the default console report. Milestone 6 is the summary, `--details`, and `--trace`. JSON and CSV stay page-level artifacts.
 
 ### 2026-10-12 (Engine and CLI edges)
 
