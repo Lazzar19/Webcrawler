@@ -222,6 +222,7 @@ To crawl some other origin:
 
 ```bash
 node backend/src/main.js https://example.com/ --depth 1 --max-pages 20
+npm start -- https://example.com/ --depth 1 --max-pages 20
 ```
 
 ### Docker

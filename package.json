@@ -6,7 +6,7 @@
   "scripts": {
     "test": "npm --prefix backend test",
     "lint": "npm --prefix backend run lint",
-    "start": "npm --prefix backend start",
+    "start": "node backend/src/main.js",
     "verify": "npm run lint && npm test"
   },
   "engines": {
