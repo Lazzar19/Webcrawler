@@ -188,6 +188,36 @@ describe("CLI child process", () => {
     expect(result.stderr).toContain("depth-limit");
   });
 
+  test("--format json --trace leaves parseable JSON on stdout and trace on stderr", async () => {
+    const start = `${server.origin}/`;
+    const result = await runCli([
+      start,
+      "--format",
+      "json",
+      "--trace",
+      "--depth",
+      "0",
+      "--min-interval",
+      "0",
+      "--max-pages",
+      "10",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).not.toContain("[trace]");
+    const parsed = JSON.parse(result.stdout);
+    expect(Object.keys(parsed)).toEqual(RESULT_FIELDS);
+    expect(parsed.startUrl).toBe(start);
+    expect(parsed.counts.ok).toBe(1);
+    expect(result.stderr.startsWith(`completed ${start}`)).toBe(true);
+    const traceAt = result.stderr.indexOf("[trace]");
+    expect(traceAt).toBeGreaterThan(0);
+    expect(result.stderr.slice(0, traceAt)).not.toContain("[trace]");
+    expect(result.stderr).toContain(`[trace] crawl-start url=${start}`);
+    expect(result.stderr).toContain("[trace] crawl-stop reason=completed");
+    expect(result.stderr).not.toContain("secret");
+  });
+
   test("CSV on stdout quotes a comma and a quote from the crawl", async () => {
     const result = await runCli([
       `${server.origin}/`,

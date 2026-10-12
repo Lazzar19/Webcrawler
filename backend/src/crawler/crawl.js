@@ -6,7 +6,7 @@ const { createPolitenessGate } = require("./politeness");
 const { createRobotsManager } = require("./robots-manager");
 const { createFrontier } = require("./frontier");
 const { canonicalKey, extractLinks } = require("./url-policy");
-const { emitTrace } = require("./trace");
+const { emitTrace, guardTrace } = require("./trace");
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const HOP_LIMIT = 5;
@@ -243,6 +243,7 @@ async function crawl(configInput, dependencies = {}) {
   const config = createCrawlConfig(configInput);
   const clock = dependencies.clock ?? createClock();
   const logger = dependencies.logger ?? createLogger();
+  const trace = guardTrace(dependencies.trace, logger);
   const fatalControl = new AbortController();
   const http = dependencies.httpClient ?? createHttpClient({
     fetchImpl: dependencies.fetchImpl,
@@ -252,7 +253,7 @@ async function crawl(configInput, dependencies = {}) {
     retryCount: config.retryCount,
     retryBaseDelayMs: config.retryBaseDelayMs,
     fatalSignal: fatalControl.signal,
-    trace: dependencies.trace,
+    trace,
   });
   const robots = createRobotsManager({
     http,
@@ -272,7 +273,7 @@ async function crawl(configInput, dependencies = {}) {
     onFatal() {
       fatalControl.abort();
     },
-    trace: dependencies.trace,
+    trace,
   });
   const startedAt = clock.now();
   const signal = dependencies.signal;
@@ -286,7 +287,7 @@ async function crawl(configInput, dependencies = {}) {
     }
   }
 
-  emitTrace(dependencies.trace, "crawl-start", { url: config.startUrl });
+  emitTrace(trace, "crawl-start", { url: config.startUrl });
   frontier.reserveStart();
   const startOrigin = new URL(config.startUrl).origin;
   const workers = [];
@@ -300,7 +301,7 @@ async function crawl(configInput, dependencies = {}) {
       logger,
       startOrigin,
       config,
-      dependencies.trace,
+      trace,
     ));
   }
 
@@ -312,7 +313,7 @@ async function crawl(configInput, dependencies = {}) {
     }
   }
 
-  emitTrace(dependencies.trace, "crawl-stop", { reason: traceStopReason(frontier) });
+  emitTrace(trace, "crawl-stop", { reason: traceStopReason(frontier) });
 
   if (frontier.fatalError) {
     throw frontier.fatalError;

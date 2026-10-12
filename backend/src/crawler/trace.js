@@ -25,9 +25,10 @@ function redactUserinfo(text) {
   if (url.username === "" && url.password === "") {
     return text;
   }
-  url.username = "***";
-  url.password = "";
-  return url.href;
+  const redacted = new URL(url.origin);
+  redacted.username = "***";
+  redacted.password = "";
+  return redacted.href;
 }
 
 function formatValue(value) {
@@ -57,7 +58,25 @@ function emitTrace(trace, event, fields) {
   trace(event, fields);
 }
 
+function guardTrace(trace, logger) {
+  if (!trace) {
+    return undefined;
+  }
+  let logged = false;
+  return (event, fields) => {
+    try {
+      trace(event, fields);
+    } catch (error) {
+      if (!logged) {
+        logged = true;
+        logger.error(error);
+      }
+    }
+  };
+}
+
 module.exports = {
   formatTrace,
   emitTrace,
+  guardTrace,
 };

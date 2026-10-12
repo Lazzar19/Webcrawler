@@ -685,12 +685,12 @@ Integration tests use a real server, not a `fetch` mock.
 
 ## Current Status
 
-**Active milestone:** Milestone 6 - Terminal output. Milestones 0–5 are complete. Part A is complete. The trace sink emits the event table. A thrown sink, the remaining quote cases, and the process-level `--format json --trace` lock have not started.
+**Active milestone:** Milestone 7 - Crawl budget. Milestones 0–6 are complete. `maxDurationMs` and `maxTotalAttempts` are not config fields yet.
 
 **Known behavior of the code today:**
 
 - `[x]` A frontier crawl, config validation, a robots manager on `robots-parser`, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 285 tests.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 291 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
 - `[x]` `npm start` from `backend/` runs `src/main.js` through `runCli`. A bad URL or flag exits `2`. A finished crawl exits `0`, including when pages failed. A fatal error or a failed `--output` write exits `1`. The second SIGINT exits `130`. The default stdout artifact is the console summary. `--format json` or `csv` without `--output` puts that artifact on stdout and the summary on stderr. `--output` writes the chosen format and still prints the summary.
@@ -708,7 +708,7 @@ Integration tests use a real server, not a `fetch` mock.
 - `[x]` A file is written only for `--output`. There is no guessed Desktop path. Console, JSON, and CSV keep `pages` in creation order.
 - `[x]` Node is pinned to 24, and ESLint checks `backend/`.
 - `[x]` `docker build -t webcrawler .` then `docker run --rm webcrawler` runs the fixture demo. The image uses Node 24, a non-root user, and a deps stage that is not the runtime. The repository does not publish the image.
-- `[x]` The default console is the count summary. `--details` prints that summary, then the page table. `--format json --details` and `--format csv --details` exit `2` before a crawl. `--details=true` and `--trace=1` exit `2`. `--trace` emits the event table to stderr and never to stdout. A record created already skipped emits `skipped` only. A robots refusal emits `commit` with `state=skipped`. JSON and CSV stay as they are.
+- `[x]` The default console is the count summary. `--details` prints that summary, then the page table. `--format json --details` and `--format csv --details` exit `2` before a crawl. `--details=true` and `--trace=1` exit `2`. `--trace` emits the event table to stderr and never to stdout. Values outside the character rule are quoted. A URL with userinfo is rewritten to that origin with username `***`. A throwing sink is logged once and does not change the result or the rejection. `--format json --trace` leaves parseable JSON on stdout. JSON and CSV stay as they are.
 - `[ ]` There is no crawl budget. `maxDurationMs` and `maxTotalAttempts` are not config fields yet. Milestone 7 adds them. Every non-fatal stop is still `interrupted`.
 - `[ ]` There are no crawler-trap guards. Milestone 8 adds URL length, path depth, and repeated segments.
 - `[ ]` A repeated HTML body is fetched and its links are reserved. A `rel=canonical` href is not read. Milestone 9 adds both.
@@ -866,9 +866,9 @@ Part B, trace:
 
 - `[x]` Add the `trace` sink to `crawl()` and the HTTP client. Default no-op. The CLI writes stderr only when `--trace` is set.
 - `[x]` Emit the event table, including `fatal` and `crawl-stop`. A record created already skipped emits `skipped` and does not emit `take` or `commit`. A reserved page that robots skips emits `commit` with `state=skipped` and does not emit a second `skipped`.
-- `[ ]` Quote values with the character rule. Redact userinfo. Do not emit bodies, cookies, or authorization.
-- `[ ]` Catch a sink throw, log it, and leave the crawl result or the original rejection in place.
-- `[ ]` Lock local event order with `concurrency: 1`. Lock that `--format json --trace` leaves parseable JSON on stdout and trace on stderr only.
+- `[x]` Quote values with the character rule. Redact userinfo. Do not emit bodies, cookies, or authorization.
+- `[x]` Catch a sink throw, log it, and leave the crawl result or the original rejection in place.
+- `[x]` Lock local event order with `concurrency: 1`. Lock that `--format json --trace` leaves parseable JSON on stdout and trace on stderr only.
 
 **Done when:** a default crawl prints the summary and no page URL list. `--details` adds the table. `--format json --details` exits `2`. `--format json --trace > result.json` is valid JSON, and the trace is only on stderr. `npm run verify` is green. The README shows the plain command, `--details`, and `--format json --trace`.
 
@@ -1408,7 +1408,18 @@ Approved: 2026-10-12. The README sections Design decisions and Known limitations
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 285 tests. A depth-0 fixture crawl lists `skipped` for `depth-limit` and `other-origin` and does not `take` them. A disallowed `/secret` is `commit state=skipped` with no page fetch.
 - **Lesson learned:** `robots.txt` is a fetch, so its `attempt-start` is inside the check and prints before `robots-check`. The page's own `attempt-start` still follows that check.
 
+### 2026-10-12 - Trace quoting, sink errors, and order
+
+- **Problem:** A trace value with a space, a newline, or a password could break the line or leak the password. A sink that threw became the crawl's failure. Nothing yet checked that `--format json --trace` in a real process keeps JSON alone on stdout.
+- **Chosen solution:** A value matching `^[A-Za-z0-9._:/-]+$` is printed raw. Anything else is JSON-quoted after CR and LF become a space. A URL with a username or password is replaced by that origin's URL with username `***` and an empty password, so the path and query are not printed. Fields other than the event's allow-list, including a body, `Cookie`, and `Authorization`, are dropped. `guardTrace` catches a sink throw, logs it once through the injected logger, and ignores later throws. The page records and a fatal rejection stay as they were. With `concurrency` 1, one page's `take` through `commit` finishes before the next `take`. A child process running `--format json --trace` parses as `CrawlResult` on stdout, and `[trace]` appears only on stderr after the summary.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 291 tests.
+- **Lesson learned:** The sink is a spectator. If it fails, the crawl that was going to succeed still succeeds, and the crawl that was going to throw still throws the same error.
+
 ## Change Log
+
+### 2026-10-12 (Trace quoting, sink errors, and order)
+
+- Trace values are quoted or redacted, and a body, cookie, or authorization is not a field. A throwing sink is logged once. `--format json --trace` keeps JSON on stdout and the trace on stderr. Milestone 6 is complete.
 
 ### 2026-10-12 (Trace sink and events)
 
