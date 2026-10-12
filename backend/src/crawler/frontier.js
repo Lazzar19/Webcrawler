@@ -45,6 +45,7 @@ function createFrontier({ config, clock, onFatal, trace }) {
   let nextSequence = 0;
   let nextCommit = 0;
   let stopping = false;
+  let stopReason = null;
   let fatalError = null;
 
   function makeQueued(fields) {
@@ -190,6 +191,9 @@ function createFrontier({ config, clock, onFatal, trace }) {
     get stopping() {
       return stopping;
     },
+    get stopReason() {
+      return stopReason;
+    },
     reserveStart,
     take() {
       return new Promise((resolve) => {
@@ -226,9 +230,14 @@ function createFrontier({ config, clock, onFatal, trace }) {
       }
       pump();
     },
-    stop() {
-      stopping = true;
-      pump();
+    stop(reason = "interrupted") {
+      if (stopReason === null) {
+        stopReason = reason;
+      }
+      if (!stopping) {
+        stopping = true;
+        pump();
+      }
     },
   };
 }

@@ -261,6 +261,25 @@ test("the first SIGINT reports the partial result and exits 0", async () => {
   expect(io.out().startsWith("interrupted https://example.com/")).toBe(true);
 });
 
+test("a budget stop exits 0", async () => {
+  const io = streams();
+  const code = await runCli(["https://example.com/", "--max-duration", "1000"], {
+    ...io,
+    signals: new EventEmitter(),
+    crawl(config) {
+      expect(config.maxDurationMs).toBe(1000);
+      return {
+        ...resultFor(config.startUrl),
+        stopReason: "budget",
+      };
+    },
+  });
+
+  expect(code).toBe(0);
+  expect(io.out().startsWith("budget https://example.com/")).toBe(true);
+  expect(io.err()).toBe("");
+});
+
 test("the second SIGINT exits 130 without writing a report", async () => {
   const io = streams();
   const signals = new EventEmitter();

@@ -8,6 +8,8 @@ test("a missing numeric flag keeps the default", () => {
 
   expect(config.maxDepth).toBe(DEFAULTS.maxDepth);
   expect(config.minIntervalMs).toBe(DEFAULTS.minIntervalMs);
+  expect(config.maxDurationMs).toBeNull();
+  expect(config.maxTotalAttempts).toBeNull();
   expect(config.respectRobots).toBe(true);
   expect(Object.isFrozen(config)).toBe(true);
 });
@@ -92,6 +94,10 @@ test.each([
   ["--concurrency", "abc", /concurrency/],
   ["--per-origin", "0", /perOriginLimit/],
   ["--timeout", "0", /timeoutMs/],
+  ["--max-duration", "0", /maxDurationMs/],
+  ["--max-attempts", "0", /maxTotalAttempts/],
+  ["--max-duration", "1.5", /maxDurationMs/],
+  ["--max-attempts", "nope", /maxTotalAttempts/],
 ])("%s %s is rejected", (flag, value, pattern) => {
   expect(() => createCliConfig([startUrl, flag, value])).toThrow(ConfigError);
   expect(() => createCliConfig([startUrl, flag, value])).toThrow(pattern);
@@ -105,4 +111,18 @@ test("a negative depth is rejected", () => {
 test("an unknown flag is rejected", () => {
   expect(() => createCliConfig([startUrl, "--bogus"])).toThrow(ConfigError);
   expect(() => createCliConfig([startUrl, "--bogus"])).toThrow(/--bogus/);
+  expect(() => createCliConfig([startUrl, "--max-bytes", "10"])).toThrow(/--max-bytes/);
+});
+
+test("--max-duration and --max-attempts become positive integers", () => {
+  const { config } = createCliConfig([
+    startUrl,
+    "--max-duration",
+    "1500",
+    "--max-attempts",
+    "4",
+  ]);
+
+  expect(config.maxDurationMs).toBe(1500);
+  expect(config.maxTotalAttempts).toBe(4);
 });

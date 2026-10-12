@@ -45,6 +45,35 @@ describe("createCrawlConfig", () => {
     expect(() => {
       createCrawlConfig({ startUrl, typo: 1 });
     }).toThrow(ConfigError);
+    expect(() => {
+      createCrawlConfig({ startUrl, maxTotalBytes: 1 });
+    }).toThrow(/Unknown config key: maxTotalBytes/);
+  });
+});
+
+describe("crawl budget config", () => {
+  test("defaults both limits to null and accepts a positive integer", () => {
+    const config = createCrawlConfig({ startUrl, maxDurationMs: 1000, maxTotalAttempts: 3 });
+
+    expect(DEFAULTS.maxDurationMs).toBeNull();
+    expect(DEFAULTS.maxTotalAttempts).toBeNull();
+    expect(config.maxDurationMs).toBe(1000);
+    expect(config.maxTotalAttempts).toBe(3);
+    expect(createCrawlConfig({ startUrl, maxDurationMs: null }).maxDurationMs).toBeNull();
+  });
+
+  test.each(["maxDurationMs", "maxTotalAttempts"])("rejects 0 for %s", (field) => {
+    expect(() => {
+      createCrawlConfig({ startUrl, [field]: 0 });
+    }).toThrow(ConfigError);
+    expect(() => {
+      createCrawlConfig({ startUrl, [field]: 0 });
+    }).toThrow(new RegExp(field));
+  });
+
+  test.each(["maxDurationMs", "maxTotalAttempts"])("rejects a negative or fractional %s", (field) => {
+    expect(() => createCrawlConfig({ startUrl, [field]: -1 })).toThrow(ConfigError);
+    expect(() => createCrawlConfig({ startUrl, [field]: 1.5 })).toThrow(ConfigError);
   });
 });
 

@@ -101,6 +101,21 @@ test("a second positional is a ConfigError", () => {
   }).toThrow(/one URL/);
 });
 
+test("--max-duration and --max-attempts stay the typed characters", () => {
+  const parsed = parseCliArgs([
+    "https://example.com/",
+    "--max-duration",
+    "0",
+    "--max-attempts=4",
+  ]);
+
+  expect(parsed.options).toEqual({
+    maxDurationMs: "0",
+    maxTotalAttempts: "4",
+  });
+  expect(parsed.options.maxDurationMs).not.toBe(0);
+});
+
 test("an unknown flag is a ConfigError", () => {
   expect(() => {
     parseCliArgs(["https://example.com/", "--bogus"]);
@@ -108,6 +123,9 @@ test("an unknown flag is a ConfigError", () => {
   expect(() => {
     parseCliArgs(["https://example.com/", "--bogus"]);
   }).toThrow(/--bogus/);
+  expect(() => {
+    parseCliArgs(["https://example.com/", "--max-bytes", "10"]);
+  }).toThrow(/--max-bytes/);
 });
 
 test("a flag that requires a value rejects a missing one", () => {

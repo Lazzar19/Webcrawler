@@ -8,6 +8,8 @@ const OPTIONS = {
   "per-origin": { type: "string" },
   "min-interval": { type: "string" },
   timeout: { type: "string" },
+  "max-duration": { type: "string" },
+  "max-attempts": { type: "string" },
   "user-agent": { type: "string" },
   "no-respect-robots": { type: "boolean" },
   format: { type: "string" },
@@ -52,6 +54,12 @@ function parseCliArgs(argv) {
   }
   if (values.timeout !== undefined) {
     options.timeoutMs = values.timeout;
+  }
+  if (values["max-duration"] !== undefined) {
+    options.maxDurationMs = values["max-duration"];
+  }
+  if (values["max-attempts"] !== undefined) {
+    options.maxTotalAttempts = values["max-attempts"];
   }
   if (values["user-agent"] !== undefined) {
     options.userAgent = values["user-agent"];

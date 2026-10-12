@@ -2,6 +2,13 @@ const { emitTrace } = require("./trace");
 
 const ACCEPT = "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1";
 
+class BudgetStop extends Error {
+  constructor(message = "crawl budget exhausted") {
+    super(message);
+    this.name = "BudgetStop";
+  }
+}
+
 class FetchError extends Error {
   constructor(kind, message, attempts, headers = {}) {
     super(message);
@@ -150,9 +157,11 @@ function createHttpClient({
   retryBaseDelayMs = 500,
   fatalSignal,
   trace,
+  claimAttempt,
 } = {}) {
   const fetchFn = fetchImpl ?? fetch;
   const now = () => clock.now();
+  const claim = claimAttempt ?? (() => true);
 
   return {
     async get(url, { maxBytes, beforeAttempt, wantBody }) {
@@ -166,6 +175,7 @@ function createHttpClient({
       let pendingKind = null;
       let pendingRetryAfter = null;
       let pendingResult = null;
+      let pendingError = null;
 
       while (attempts < maxAttempts) {
         if (attempts > 0) {
@@ -179,6 +189,12 @@ function createHttpClient({
           if (wait === null) {
             return pendingResult;
           }
+          if (!claim()) {
+            if (pendingError) {
+              throw pendingError;
+            }
+            return pendingResult;
+          }
           const retryFields = { url, next: attempts + 1, wait };
           if (pendingStatus != null) {
             retryFields.status = pendingStatus;
@@ -187,6 +203,8 @@ function createHttpClient({
           }
           emitTrace(trace, "retry", retryFields);
           await sleepOrAbort(wait, clock, fatalSignal);
+        } else if (!claim()) {
+          throw new BudgetStop();
         }
 
         await beforeAttempt();
@@ -255,7 +273,11 @@ function createHttpClient({
           pendingKind = null;
           pendingRetryAfter = retryAfter;
           pendingResult = result;
+          pendingError = null;
         } catch (error) {
+          if (error instanceof BudgetStop) {
+            throw error;
+          }
           const cause = signal.aborted && signal.reason instanceof Error ? signal.reason : error;
           const headers = { statusCode: headerStatus, contentType: headerContentType };
           const failure = error instanceof FetchError
@@ -273,6 +295,7 @@ function createHttpClient({
           pendingKind = failure.kind;
           pendingRetryAfter = null;
           pendingResult = null;
+          pendingError = failure;
         }
       }
 
@@ -282,6 +305,7 @@ function createHttpClient({
 }
 
 module.exports = {
+  BudgetStop,
   FetchError,
   createHttpClient,
 };

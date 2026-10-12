@@ -1,4 +1,4 @@
-const { createHttpClient } = require("../src/crawler/http-client");
+const { BudgetStop, FetchError, createHttpClient } = require("../src/crawler/http-client");
 
 const clock = {
   now: () => 1_700_000_000_000,
@@ -587,4 +587,184 @@ test("fatal-stop ends the retry sleep and does not abort the fetch", async () =>
   expect(hooks).toEqual(["before", "before"]);
   expect(fetchSignal.aborted).toBe(false);
   expect(fetchSignal).not.toBe(fatal.signal);
+});
+
+test("a claim runs before the retry sleep and before beforeAttempt", async () => {
+  const events = [];
+  let calls = 0;
+  const http = createHttpClient({
+    fetchImpl() {
+      calls += 1;
+      events.push("fetch");
+      if (calls === 1) {
+        throw fetchFailed("ECONNRESET");
+      }
+      return statusResponse(200, { "content-type": "text/html" });
+    },
+    clock: {
+      now: () => 0,
+      sleep() {
+        events.push("sleep");
+        return Promise.resolve();
+      },
+    },
+    userAgent: "WebcrawlerBot/1.0",
+    timeoutMs: 1000,
+    retryCount: 1,
+    claimAttempt() {
+      events.push("claim");
+      return true;
+    },
+  });
+
+  await http.get("https://example.com/", {
+    maxBytes: 1000,
+    async beforeAttempt() {
+      events.push("before");
+    },
+    wantBody() {
+      return false;
+    },
+  });
+
+  expect(events).toEqual([
+    "claim",
+    "before",
+    "fetch",
+    "claim",
+    "sleep",
+    "before",
+    "fetch",
+  ]);
+});
+
+test("a refused first claim does not fetch and throws BudgetStop", async () => {
+  let fetched = false;
+  let hooked = false;
+  const http = createHttpClient({
+    fetchImpl() {
+      fetched = true;
+      return statusResponse(200);
+    },
+    clock,
+    userAgent: "WebcrawlerBot/1.0",
+    timeoutMs: 1000,
+    claimAttempt() {
+      return false;
+    },
+  });
+
+  const error = await http.get("https://example.com/", {
+    maxBytes: 1000,
+    async beforeAttempt() {
+      hooked = true;
+    },
+    wantBody() {
+      return false;
+    },
+  }).catch((caught) => caught);
+
+  expect(error).toBeInstanceOf(BudgetStop);
+  expect(error).not.toBeInstanceOf(FetchError);
+  expect(fetched).toBe(false);
+  expect(hooked).toBe(false);
+});
+
+test("a refused retry returns the last response and does not sleep or fetch again", async () => {
+  const events = [];
+  let claims = 0;
+  const http = createHttpClient({
+    fetchImpl() {
+      events.push("fetch");
+      return statusResponse(500);
+    },
+    clock: {
+      now: () => 0,
+      sleep() {
+        events.push("sleep");
+        return Promise.resolve();
+      },
+    },
+    userAgent: "WebcrawlerBot/1.0",
+    timeoutMs: 1000,
+    retryCount: 1,
+    claimAttempt() {
+      claims += 1;
+      events.push("claim");
+      return claims === 1;
+    },
+  });
+
+  const response = await http.get("https://example.com/", {
+    maxBytes: 1000,
+    async beforeAttempt() {},
+    wantBody() {
+      return false;
+    },
+  });
+
+  expect(response.statusCode).toBe(500);
+  expect(events).toEqual(["claim", "fetch", "claim"]);
+});
+
+test("a refused retry rethrows the last FetchError", async () => {
+  let calls = 0;
+  let slept = false;
+  const http = createHttpClient({
+    fetchImpl() {
+      calls += 1;
+      throw fetchFailed("ECONNRESET");
+    },
+    clock: {
+      now: () => 0,
+      sleep() {
+        slept = true;
+        return Promise.resolve();
+      },
+    },
+    userAgent: "WebcrawlerBot/1.0",
+    timeoutMs: 1000,
+    retryCount: 1,
+    claimAttempt() {
+      return calls === 0;
+    },
+  });
+
+  const error = await http.get("https://example.com/", htmlOptions(1000)).catch((caught) => caught);
+
+  expect(error).toBeInstanceOf(FetchError);
+  expect(error.kind).toBe("reset");
+  expect(error).not.toBeInstanceOf(BudgetStop);
+  expect(calls).toBe(1);
+  expect(slept).toBe(false);
+});
+
+test("beforeAttempt throwing BudgetStop is not wrapped as a FetchError", async () => {
+  let fetched = false;
+  const http = createHttpClient({
+    fetchImpl() {
+      fetched = true;
+      return statusResponse(200);
+    },
+    clock,
+    userAgent: "WebcrawlerBot/1.0",
+    timeoutMs: 1000,
+    claimAttempt() {
+      return true;
+    },
+  });
+
+  const error = await http.get("https://example.com/", {
+    maxBytes: 1000,
+    beforeAttempt() {
+      throw new BudgetStop("from hook");
+    },
+    wantBody() {
+      return false;
+    },
+  }).catch((caught) => caught);
+
+  expect(error).toBeInstanceOf(BudgetStop);
+  expect(error.message).toBe("from hook");
+  expect(fetched).toBe(false);
 });

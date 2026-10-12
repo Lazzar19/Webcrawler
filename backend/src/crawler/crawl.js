@@ -1,7 +1,7 @@
 const { createClock } = require("./clock");
 const { createLogger } = require("./logger");
 const { createCrawlConfig } = require("./crawl-config");
-const { createHttpClient, FetchError } = require("./http-client");
+const { createHttpClient, BudgetStop, FetchError } = require("./http-client");
 const { createPolitenessGate } = require("./politeness");
 const { createRobotsManager } = require("./robots-manager");
 const { createFrontier } = require("./frontier");
@@ -207,8 +207,10 @@ async function runWorker(frontier, gate, robots, http, clock, logger, startOrigi
       frontier.commit(item);
     } catch (error) {
       item.links = [];
-      frontier.fail(error, logger);
-      throw error;
+      if (!(error instanceof BudgetStop)) {
+        frontier.fail(error, logger);
+        throw error;
+      }
     } finally {
       if (lease) {
         lease.release();
@@ -222,8 +224,8 @@ function traceStopReason(frontier) {
   if (frontier.fatalError) {
     return "fatal";
   }
-  if (frontier.stopping) {
-    return "interrupted";
+  if (frontier.stopReason) {
+    return frontier.stopReason;
   }
   return "completed";
 }
@@ -245,6 +247,33 @@ async function crawl(configInput, dependencies = {}) {
   const logger = dependencies.logger ?? createLogger();
   const trace = guardTrace(dependencies.trace, logger);
   const fatalControl = new AbortController();
+  const startedAt = clock.now();
+  let claimedAttempts = 0;
+  const frontier = createFrontier({
+    config,
+    clock,
+    onFatal() {
+      fatalControl.abort();
+    },
+    trace,
+  });
+
+  function claimAttempt() {
+    if (frontier.stopReason === "budget") {
+      return false;
+    }
+    if (config.maxTotalAttempts != null && claimedAttempts >= config.maxTotalAttempts) {
+      frontier.stop("budget");
+      return false;
+    }
+    if (config.maxDurationMs != null && clock.now() - startedAt >= config.maxDurationMs) {
+      frontier.stop("budget");
+      return false;
+    }
+    claimedAttempts += 1;
+    return true;
+  }
+
   const http = dependencies.httpClient ?? createHttpClient({
     fetchImpl: dependencies.fetchImpl,
     clock,
@@ -254,6 +283,7 @@ async function crawl(configInput, dependencies = {}) {
     retryBaseDelayMs: config.retryBaseDelayMs,
     fatalSignal: fatalControl.signal,
     trace,
+    claimAttempt,
   });
   const robots = createRobotsManager({
     http,
@@ -267,15 +297,6 @@ async function crawl(configInput, dependencies = {}) {
     robots,
     fatalSignal: fatalControl.signal,
   });
-  const frontier = createFrontier({
-    config,
-    clock,
-    onFatal() {
-      fatalControl.abort();
-    },
-    trace,
-  });
-  const startedAt = clock.now();
   const signal = dependencies.signal;
 
   const onAbort = () => frontier.stop();
@@ -326,7 +347,7 @@ async function crawl(configInput, dependencies = {}) {
     startedAt: new Date(startedAt).toISOString(),
     finishedAt: new Date(finishedAt).toISOString(),
     durationMs: finishedAt - startedAt,
-    stopReason: frontier.stopping ? "interrupted" : "completed",
+    stopReason: frontier.stopReason ?? "completed",
     config,
     pages: frontier.pages,
     robots: robots.summaries(),

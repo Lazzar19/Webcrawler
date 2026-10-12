@@ -8,6 +8,8 @@ const INTEGER_RULE = {
   concurrency: "positive integer",
   perOriginLimit: "positive integer",
   timeoutMs: "positive integer",
+  maxDurationMs: "positive integer",
+  maxTotalAttempts: "positive integer",
 };
 
 function integerFlag(field, raw) {

@@ -10,6 +10,8 @@ const DEFAULTS = {
   retryBaseDelayMs: 500,
   respectRobots: true,
   userAgent: "WebcrawlerBot/1.0 (+https://github.com/Lazzar19/webcrawler)",
+  maxDurationMs: null,
+  maxTotalAttempts: null,
 };
 
 const ALLOWED_KEYS = new Set(["startUrl", ...Object.keys(DEFAULTS)]);
@@ -37,6 +39,10 @@ function isNonNegativeInteger(value) {
 
 function isPositiveInteger(value) {
   return Number.isInteger(value) && value > 0;
+}
+
+function isNullOrPositiveInteger(value) {
+  return value === null || isPositiveInteger(value);
 }
 
 function validateStartUrl(startUrl) {
@@ -102,6 +108,12 @@ function createCrawlConfig(options = {}) {
   }
   if (hasControlCharacter(config.userAgent)) {
     throw new ConfigError("userAgent must not contain control characters");
+  }
+  if (!isNullOrPositiveInteger(config.maxDurationMs)) {
+    throw new ConfigError("maxDurationMs must be null or a positive integer");
+  }
+  if (!isNullOrPositiveInteger(config.maxTotalAttempts)) {
+    throw new ConfigError("maxTotalAttempts must be null or a positive integer");
   }
 
   return Object.freeze(config);
