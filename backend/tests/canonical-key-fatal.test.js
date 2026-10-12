@@ -4,6 +4,13 @@ jest.mock("../src/crawler/url-policy", () => {
   const actual = jest.requireActual("../src/crawler/url-policy");
   return {
     ...actual,
+    readHtml() {
+      return {
+        links: ["not a url"],
+        canonicalHref: null,
+        baseHref: "https://example.com/",
+      };
+    },
     extractLinks() {
       return ["not a url"];
     },

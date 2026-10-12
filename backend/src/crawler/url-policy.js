@@ -60,7 +60,48 @@ function logIgnored(logger, reason, raw, pageUrl) {
   logger.debug(`ignored ${reason} ${oneLine(raw)} base ${oneLine(pageUrl)}`);
 }
 
-function extractLinks(html, pageUrl, logger) {
+function canonicalRawHref(document) {
+  for (const link of document.querySelectorAll("link")) {
+    const rel = link.getAttribute("rel");
+    if (rel === null || rel.trim() === "") {
+      continue;
+    }
+    const tokens = rel.trim().split(/\s+/);
+    if (tokens.some((token) => token.toLowerCase() === "canonical")) {
+      return link.getAttribute("href");
+    }
+  }
+  return null;
+}
+
+function declaredCanonicalKey(raw, baseHref, pageKey, startOrigin) {
+  if (raw == null) {
+    return null;
+  }
+  let resolved;
+  try {
+    resolved = new URL(raw, baseHref);
+  } catch {
+    return null;
+  }
+  if (resolved.protocol !== "http:" && resolved.protocol !== "https:") {
+    return null;
+  }
+  if (resolved.username !== "" || resolved.password !== "") {
+    return null;
+  }
+  if (resolved.origin !== startOrigin) {
+    return null;
+  }
+  resolved.hash = "";
+  const key = canonicalKey(resolved.href);
+  if (key === pageKey) {
+    return null;
+  }
+  return { key, spelling: resolved.href };
+}
+
+function readHtml(html, pageUrl, logger) {
   const document = new JSDOM(html).window.document;
   const base = documentBase(document, pageUrl);
   const links = [];
@@ -89,10 +130,20 @@ function extractLinks(html, pageUrl, logger) {
     links.push(resolved.href);
   }
 
-  return links;
+  return {
+    links,
+    canonicalHref: canonicalRawHref(document),
+    baseHref: base.href,
+  };
+}
+
+function extractLinks(html, pageUrl, logger) {
+  return readHtml(html, pageUrl, logger).links;
 }
 
 module.exports = {
   canonicalKey,
+  declaredCanonicalKey,
   extractLinks,
+  readHtml,
 };

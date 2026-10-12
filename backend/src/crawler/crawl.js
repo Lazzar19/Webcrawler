@@ -6,7 +6,7 @@ const { createHttpClient, BudgetStop, FetchError } = require("./http-client");
 const { createPolitenessGate } = require("./politeness");
 const { createRobotsManager } = require("./robots-manager");
 const { createFrontier, trapReason } = require("./frontier");
-const { canonicalKey, extractLinks } = require("./url-policy");
+const { canonicalKey, declaredCanonicalKey, readHtml } = require("./url-policy");
 const { emitTrace, guardTrace } = require("./trace");
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -186,7 +186,16 @@ async function fetchRecord(item, lease, http, robots, frontier, clock, startOrig
     }
 
     try {
-      item.links = extractLinks(response.body, page.finalUrl, logger);
+      const parsed = readHtml(response.body, page.finalUrl, logger);
+      item.links = parsed.links;
+      if (config.respectCanonical) {
+        item.canonicalTarget = declaredCanonicalKey(
+          parsed.canonicalHref,
+          parsed.baseHref,
+          page.canonicalUrl,
+          startOrigin
+        );
+      }
       if (config.dedupeContent && typeof response.body === "string") {
         item.contentHash = contentHash(response.body);
       }

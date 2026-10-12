@@ -1,4 +1,4 @@
-const { extractLinks } = require("../src/crawler/url-policy");
+const { extractLinks, readHtml } = require("../src/crawler/url-policy");
 
 const pageUrl = "https://example.com/dir/page";
 
@@ -83,4 +83,32 @@ test("resolved spellings keep a trailing slash and drop the fragment", () => {
     "https://example.com/a/",
     "https://example.com/a/",
   ]);
+});
+
+test("the first canonical link keeps its raw href", () => {
+  const html = page(`
+    <link rel="stylesheet" href="/style.css">
+    <link rel="author Canonical" href="/first#section">
+    <link rel="canonical" href="/second">
+    <a href="/kept"></a>
+  `);
+  const parsed = readHtml(html, pageUrl);
+
+  expect(parsed.canonicalHref).toBe("/first#section");
+  expect(parsed.links).toEqual(["https://example.com/kept"]);
+});
+
+test("a missing canonical tag and a non-token rel yield no href", () => {
+  expect(readHtml(page('<a href="/a"></a>'), pageUrl).canonicalHref).toBeNull();
+  expect(readHtml(page('<link rel="canonical-not" href="/nope">'), pageUrl).canonicalHref).toBeNull();
+  expect(readHtml(page('<a rel="canonical" href="/no"></a>'), pageUrl).canonicalHref).toBeNull();
+});
+
+test("the first canonical link wins even when it has no href", () => {
+  const html = page(`
+    <link rel="canonical">
+    <link rel="canonical" href="/second">
+  `);
+
+  expect(readHtml(html, pageUrl).canonicalHref).toBeNull();
 });

@@ -344,7 +344,7 @@ On commit, the first matching rule decides:
 
 `fetching` is transient. A finished result does not contain it: in-flight work reaches `ok`, `skipped`, or `failed` before the result is returned. `queued` appears in a result only after an interrupt or a budget stop. If a `fetching` record is still present, `--details` prints a row for it and the summary does not throw. A throw there would replace the partial crawl with a fatal report error. The summary does not add a seventh count for it.
 
-Skip reasons: `other-origin`, `redirect-off-origin`, `depth-limit`, `page-limit`, `duplicate`, `robots`, `robots-unavailable`, `non-html`, `budget`, `url-length`, `path-depth`, `repeated-segment`, `duplicate-content`.
+Skip reasons: `other-origin`, `redirect-off-origin`, `depth-limit`, `page-limit`, `duplicate`, `robots`, `robots-unavailable`, `non-html`, `budget`, `url-length`, `path-depth`, `repeated-segment`, `duplicate-content`, `canonical`.
 
 A skipped or failed URL is a record in the result. It is not a successful page. The old `pages` map that stored a hit count is retired. Inbound link counts are out of scope.
 
@@ -685,12 +685,12 @@ Integration tests use a real server, not a `fetch` mock.
 
 ## Current Status
 
-**Active milestone:** Milestone 9 - Content identity. The first two checklist items are done and have not been approved. The rest of Milestone 9 has not started. Milestone 8 is complete and has not been approved.
+**Active milestone:** Milestone 9 - Content identity. The checklist is complete and has not been approved. Milestone 8 is complete and has not been approved.
 
 **Known behavior of the code today:**
 
 - `[x]` A frontier crawl, config validation, a robots manager on `robots-parser`, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 350 tests.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 365 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
 - `[x]` `npm start` from `backend/` runs `src/main.js` through `runCli`. A bad URL or flag exits `2`. A finished crawl exits `0`, including when pages failed. A fatal error or a failed `--output` write exits `1`. The second SIGINT exits `130`. The default stdout artifact is the console summary. `--format json` or `csv` without `--output` puts that artifact on stdout and the summary on stderr. `--output` writes the chosen format and still prints the summary.
@@ -711,8 +711,7 @@ Integration tests use a real server, not a `fetch` mock.
 - `[x]` The default console is the count summary. `--details` prints that summary, then the page table. `--format json --details` and `--format csv --details` exit `2` before a crawl. `--details=true` and `--trace=1` exit `2`. `--trace` emits the event table to stderr and never to stdout. Values outside the character rule are quoted. A URL with userinfo is rewritten to that origin with username `***`. A throwing sink is logged once and does not change the result or the rejection. `--format json --trace` leaves parseable JSON on stdout. JSON and CSV stay as they are.
 - `[x]` `maxDurationMs` and `maxTotalAttempts` default to `null`. `0` is a `ConfigError`. `--max-duration` and `--max-attempts` set them, and `--max-bytes` is rejected. `claimAttempt()` runs before a retry sleep and before `beforeAttempt`. A refused claim does not fetch. `BudgetStop` does not become fatal-stop. The first stop reason stays: a budget stop exits `0`, and a later SIGINT does not replace it. A page that never starts a request is `skipped` / `budget`. A refused retry or hop keeps what it already earned. After the stop, queued records stay queued and a later commit reserves nothing.
 - `[x]` `maxUrlLength`, `maxPathDepth`, and `maxSegmentRepeats` default to `2048`, `16`, and `2`. `0` is a `ConfigError`. A discovered key is checked after crawl depth and before `maxPages`, in that order. A hit is skipped, enters `seen`, is not fetched, and does not count as a reservation. The start URL is fetched even when its key would trip a guard. A redirect hop is checked after the duplicate check and before robots. A refused hop keeps the attempts and the last status, and its key does not take a reservation.
-- `[x]` `dedupeContent` and `respectCanonical` default to `true`. `--no-dedupe-content` and `--no-canonical` set them false, and a value on either flag exits `2`. A successful HTML body is hashed with SHA-256 when `dedupeContent` is true. At commit time, the second copy is `skipped` / `duplicate-content`, keeps the status, content type, byte length, and attempts, and reserves no links. An empty body has a hash. A non-HTML page, a failed page, and a parse failure do not enter the set. `--no-dedupe-content` leaves both copies `ok`.
-- `[ ]` A `rel=canonical` href is not read. The rest of Milestone 9 adds that, the concurrency winner, and the fixture-body pass.
+- `[x]` `dedupeContent` and `respectCanonical` default to `true`. `--no-dedupe-content` and `--no-canonical` set them false, and a value on either flag exits `2`. A successful HTML body is hashed with SHA-256 when `dedupeContent` is true. At commit time, the second copy is `skipped` / `duplicate-content`, keeps the status, content type, byte length, and attempts, and reserves no links. An empty body has a hash. A non-HTML page, a failed page, and a parse failure do not enter the set. The copy that commits first owns the hash when `concurrency` is greater than 1. The first `rel=canonical` href that names another on-origin key makes the page `skipped` / `canonical` and reserves that target at the same depth. Its own links are not reserved. A tag that does not parse, has userinfo, is off-origin, or names this record's key is ignored. With both flags off, link reservation matches the crawl from before this milestone.
 
 ## Milestones
 
@@ -909,9 +908,9 @@ The contract is Content identity. Do this after Milestone 8. Do not add a body-h
 
 - `[x]` Add `dedupeContent` and `respectCanonical`, both default `true`. Wire `--no-dedupe-content` and `--no-canonical` as valueless flags.
 - `[x]` Hash a successful HTML body with `node:crypto` SHA-256 at commit time. The second committed copy is `skipped` / `duplicate-content`, keeps the fetch fields, and reserves no links. A parse failure does not enter the hash set. An empty body does.
-- `[ ]` Read the first `rel=canonical` href. A declared other key makes the fetched page `skipped` / `canonical` and reserves that target at the same depth, subject to origin, traps, and `maxPages`. Ignore a tag that does not parse, has userinfo, is off-origin, or names this record's own key.
-- `[ ]` With `concurrency` greater than 1, the copy that commits first owns the hash. The other becomes `duplicate-content`.
-- `[ ]` Give fixture pages that share a body distinct bodies, or expect `duplicate-content`. With both disable flags, link reservation matches the crawl from before this milestone.
+- `[x]` Read the first `rel=canonical` href. A declared other key makes the fetched page `skipped` / `canonical` and reserves that target at the same depth, subject to origin, traps, and `maxPages`. Ignore a tag that does not parse, has userinfo, is off-origin, or names this record's own key.
+- `[x]` With `concurrency` greater than 1, the copy that commits first owns the hash. The other becomes `duplicate-content`.
+- `[x]` Give fixture pages that share a body distinct bodies, or expect `duplicate-content`. With both disable flags, link reservation matches the crawl from before this milestone.
 
 **Done when:** two URLs with the same body produce one fetched page with links and one `duplicate-content` page without them. A canonical tag reserves the target and does not reserve the alias page's other links. Both disable flags leave link reservation unchanged. `npm run verify` is green.
 
@@ -1451,7 +1450,18 @@ Approved: 2026-10-12. The README sections Design decisions and Known limitations
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 350 tests. The second copy of a body, including `""`, is `duplicate-content` and its child is discovered from the first copy. A different body stays `ok`. `text/plain`, a `500`, and a parser throw do not make the next HTML page a duplicate. `--no-dedupe-content` leaves both copies `ok`.
 - **Lesson learned:** The hash is remembered when the body is read, and membership is decided when the page commits. Two workers can both fetch the same body. Only the earlier commit owns it.
 
+### 2026-10-12 - Canonical target and the commit winner
+
+- **Problem:** A copied HTML page still fed the queue from whichever worker finished first, and a `rel=canonical` href was ignored, so the crawl followed the alias page's links.
+- **Chosen solution:** The parser returns the raw href of the first `<link>` whose `rel` tokens include `canonical`. At commit, a hash already in the set is `duplicate-content` and reserves nothing, including a canonical target. Otherwise a declared other key makes the page `skipped` / `canonical`, stores the hash when dedupe is on, and reserves that key at the same depth. Origin, traps, and `maxPages` still apply. The page's own links are not reserved. A href that does not parse, has userinfo, is off-origin, or names this record is ignored. The earlier dequeue sequence owns the hash even when the other response arrives first. After a stop, the commit still records the decision and reserves nothing. Fixture pages that only happened to share a body now have distinct bodies. With both flags off, the anchors are reserved and the canonical target is not.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 365 tests. A canonical at `maxDepth` is fetched and the alias page's other link is absent. `/a/b` is `path-depth` when the cap is 1. A full `maxPages` leaves the target `page-limit`. The copy that finishes first and commits second is `duplicate-content`, and the child is discovered from the earlier commit. Both disable flags fetch `/own` and do not fetch `/canon`.
+- **Lesson learned:** Commit order is the identity order. Finish order can fetch both copies, and only the earlier sequence decides which links enter the queue.
+
 ## Change Log
+
+### 2026-10-12 (Canonical target and the commit winner)
+
+- A `rel=canonical` target is reserved at the same depth, and the alias page's own links are not. The earlier commit owns a shared body hash. Both disable flags leave link reservation as it was before content identity. Milestone 9's checklist is complete.
 
 ### 2026-10-12 (Content hash at commit time)
 

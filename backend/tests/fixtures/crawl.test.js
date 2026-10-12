@@ -204,8 +204,8 @@ describe("fixture crawl", () => {
     await withServer(
       {
         "/": html('<a href="/a"></a><a href="/b"></a>'),
-        "/a": html(""),
-        "/b": html(""),
+        "/a": html("<p>a</p>"),
+        "/b": html("<p>b</p>"),
       },
       async (server) => {
         const result = await crawlOrigin(server, { maxDepth: 2, maxPages: 2, concurrency: 1 });
@@ -285,9 +285,9 @@ describe("fixture crawl", () => {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         res.end('<a href="/x"></a><a href="/z"></a>');
       },
-      "/x": html(""),
-      "/y": html(""),
-      "/z": html(""),
+      "/x": html("<p>x</p>"),
+      "/y": html("<p>y</p>"),
+      "/z": html("<p>z</p>"),
     };
 
     const slow = await withServer(routes, (server) =>
@@ -866,6 +866,58 @@ describe("fixture crawl", () => {
     } finally {
       await server.close();
     }
+  });
+
+  test("both disable flags reserve links the way they did before content identity", async () => {
+    const shared = '<link rel="canonical" href="/canon"><a href="/own"></a>';
+    const routes = {
+      "/": html('<a href="/a"></a><a href="/b"></a>'),
+      "/a": html(shared),
+      "/b": html(shared),
+      "/own": html("<p>own</p>"),
+      "/canon": html("<p>canon</p>"),
+    };
+
+    await withServer(routes, async (server) => {
+      const result = await crawlOrigin(server, {
+        maxDepth: 2,
+        maxPages: 10,
+        concurrency: 1,
+        dedupeContent: false,
+        respectCanonical: false,
+      });
+      expect(paths(server)).toEqual(["/robots.txt", "/", "/a", "/b", "/own"]);
+      expect(result.pages.map((page) => [new URL(page.canonicalUrl).pathname, page.state, page.skipReason])).toEqual([
+        ["/", "ok", null],
+        ["/a", "ok", null],
+        ["/b", "ok", null],
+        ["/own", "ok", null],
+      ]);
+      expect(result.pages.find((page) => page.canonicalUrl.endsWith("/own")).discoveredFrom).toBe(`${server.origin}/a`);
+    });
+  });
+
+  test("a shared fixture body is duplicate-content once a canonical copy has committed", async () => {
+    const shared = '<link rel="canonical" href="/canon"><a href="/own"></a>';
+    const routes = {
+      "/": html('<a href="/a"></a><a href="/b"></a>'),
+      "/a": html(shared),
+      "/b": html(shared),
+      "/own": html("<p>own</p>"),
+      "/canon": html("<p>canon</p>"),
+    };
+
+    await withServer(routes, async (server) => {
+      const result = await crawlOrigin(server, { maxDepth: 2, maxPages: 10, concurrency: 1 });
+      expect(paths(server)).toEqual(["/robots.txt", "/", "/a", "/b", "/canon"]);
+      expect(result.pages.map((page) => [new URL(page.canonicalUrl).pathname, page.skipReason])).toEqual([
+        ["/", null],
+        ["/a", "canonical"],
+        ["/b", "duplicate-content"],
+        ["/canon", null],
+      ]);
+      expect(result.pages.find((page) => page.canonicalUrl.endsWith("/canon")).discoveredFrom).toBe(`${server.origin}/a`);
+    });
   });
 
   test("a ten-link fan-out at depth 2 finishes with five workers", async () => {

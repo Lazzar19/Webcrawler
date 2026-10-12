@@ -130,37 +130,47 @@ function createFrontier({ config, clock, onFatal, trace }) {
     }));
   }
 
+  function consider(link, depth, discoveredFrom) {
+    if (seen.has(link.key)) {
+      return;
+    }
+    const fields = {
+      canonicalUrl: link.key,
+      requestedUrl: link.spelling,
+      discoveredFrom,
+      depth,
+    };
+    if (new URL(link.spelling).origin !== startOrigin) {
+      makeSkipped(fields, "other-origin");
+      return;
+    }
+    if (depth > config.maxDepth) {
+      makeSkipped(fields, "depth-limit");
+      return;
+    }
+    const guard = trapReason(link.key, config);
+    if (guard !== null) {
+      makeSkipped(fields, guard);
+      return;
+    }
+    if (fetchReservations >= config.maxPages) {
+      makeSkipped(fields, "page-limit");
+      return;
+    }
+    makeQueued(fields);
+  }
+
   function reserveLinks(parent, hrefs) {
     for (const link of linksInCommitOrder(hrefs)) {
-      if (seen.has(link.key)) {
-        continue;
-      }
-      const depth = parent.page.depth + 1;
-      const fields = {
-        canonicalUrl: link.key,
-        requestedUrl: link.spelling,
-        discoveredFrom: parent.page.canonicalUrl,
-        depth,
-      };
-      if (new URL(link.spelling).origin !== startOrigin) {
-        makeSkipped(fields, "other-origin");
-        continue;
-      }
-      if (depth > config.maxDepth) {
-        makeSkipped(fields, "depth-limit");
-        continue;
-      }
-      const guard = trapReason(link.key, config);
-      if (guard !== null) {
-        makeSkipped(fields, guard);
-        continue;
-      }
-      if (fetchReservations >= config.maxPages) {
-        makeSkipped(fields, "page-limit");
-        continue;
-      }
-      makeQueued(fields);
+      consider(link, parent.page.depth + 1, parent.page.canonicalUrl);
     }
+  }
+
+  function reserveCanonical(item) {
+    if (item.canonicalTarget == null) {
+      return;
+    }
+    consider(item.canonicalTarget, item.page.depth, item.page.canonicalUrl);
   }
 
   function pump() {
@@ -196,17 +206,27 @@ function createFrontier({ config, clock, onFatal, trace }) {
     }
   }
 
-  function noteContent(item) {
-    if (!config.dedupeContent || item.contentHash == null) {
-      return;
-    }
-    if (contentHashes.has(item.contentHash)) {
+  function applyIdentity(item) {
+    const hash = config.dedupeContent ? item.contentHash : null;
+    if (hash != null && contentHashes.has(hash)) {
       item.page.state = "skipped";
       item.page.skipReason = "duplicate-content";
       item.links = [];
+      item.canonicalTarget = null;
       return;
     }
-    contentHashes.add(item.contentHash);
+    if (item.canonicalTarget != null) {
+      if (hash != null) {
+        contentHashes.add(hash);
+      }
+      item.page.state = "skipped";
+      item.page.skipReason = "canonical";
+      item.links = [];
+      return;
+    }
+    if (hash != null) {
+      contentHashes.add(hash);
+    }
   }
 
   function drain() {
@@ -215,8 +235,11 @@ function createFrontier({ config, clock, onFatal, trace }) {
       buffer.delete(nextCommit);
       inFlight -= 1;
       try {
-        noteContent(item);
+        applyIdentity(item);
         if (!stopping) {
+          if (item.page.skipReason === "canonical") {
+            reserveCanonical(item);
+          }
           reserveLinks(item, item.links);
         }
       } finally {
