@@ -467,12 +467,12 @@ Integration tests use a real server, not a `fetch` mock.
 
 ## Current Status
 
-**Active milestone:** Milestone 3 - CLI and reports. The Desktop writer and the hit-count sort are gone. The child-process CLI test has not started.
+**Active milestone:** Milestone 3 - CLI and reports. The checklist is complete. Milestone 4 has not started.
 
 **Known behavior of the code today:**
 
 - `[x]` A frontier crawl, config validation, a robots manager on `robots-parser`, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 247 tests.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 255 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
 - `[x]` `npm start` from `backend/` runs `src/main.js` through `runCli`. A bad URL or flag exits `2`. A finished crawl exits `0`, including when pages failed. A fatal error or a failed `--output` write exits `1`. The second SIGINT exits `130`. The default stdout artifact is the console summary. `--format json` or `csv` without `--output` puts that artifact on stdout and the summary on stderr. `--output` writes the chosen format and still prints the summary.
@@ -595,7 +595,7 @@ The console summary in Output is not part of this milestone.
 - `[x]` Write files only to `--output`. Delete `getDesktopPath`, `saveToCSV`, and `printReport` in that change. No guessed Desktop path remains.
 - `[x]` Delete `sortPages` and rewrite [backend/tests/report.test.js](backend/tests/report.test.js). The console summary and every other reporter keep `pages` in creation order. The hit-count sort goes away with the Desktop writer.
 - `[x]` On SIGINT, stop handing out items, finish in-flight work, and emit the partial result.
-- `[ ]` Test the CLI as a child process against the fixture: bad arguments, explicit `0`, JSON shape, JSON on stdout being parseable, CSV escaping, and a crawl that includes a failed page.
+- `[x]` Test the CLI as a child process against the fixture: bad arguments, explicit `0`, JSON shape, JSON on stdout being parseable, CSV escaping, and a crawl that includes a failed page.
 
 **Done when:** `node backend/src/main.js` against the fixture prints the console summary from Output, a stranger can see which pages were fetched, skipped, and failed, no CSV is written to a Desktop path, and JSON matches the result shape.
 
@@ -1022,7 +1022,18 @@ These replace the looser readings from the first draft of this checkpoint.
 - **How it was verified:** `npm run verify`. Lint is clean. The order test uses `https://example.com/z` before `https://example.com/a`.
 - **Lesson learned:** Creation order is the report order. A sort by hits or by URL would tell a different story from the crawl.
 
+### 2026-10-12 - CLI process
+
+- **Problem:** The exit codes and the report text were locked by calling `runCli` in-process. A script depends on the real process: its exit code, stdout being one artifact, and stderr carrying the summary when JSON or CSV is selected.
+- **Chosen solution:** Spawn `node src/main.js` against the local fixture. Bad arguments exit `2` with an empty stdout. `--depth 0` prints the summary, records the child as `depth-limit`, and does not request it. `--format json` stdout parses as the `CrawlResult` shape, with `maxDepth` still `0`, and the summary is on stderr. `--format csv` quotes a content type that contains a comma and a quote. A depth-1 crawl prints an `ok` line, a `skipped` / `non-html` line, and a `failed` / `http-status` line, and exits `0`.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 255 tests.
+- **Lesson learned:** `reserved` counts fetch reservations. A `depth-limit` record is in the summary and is not a reservation, so depth `0` reports `reserved 1` and three skipped children.
+
 ## Change Log
+
+### 2026-10-12 (CLI process)
+
+- The CLI is tested as a child process against the fixture: bad arguments, explicit depth `0`, parseable JSON in the result shape, quoted CSV, and a crawl that shows fetched, skipped, and failed pages.
 
 ### 2026-10-12 (Creation order)
 
