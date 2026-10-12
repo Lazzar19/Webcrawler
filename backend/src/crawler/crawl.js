@@ -57,6 +57,15 @@ async function fetchRecord(item, lease, http, robots, frontier, clock, startOrig
         },
       });
     } catch (error) {
+      if (error instanceof BudgetStop) {
+        item.links = [];
+        skipPage(page, "budget");
+        if (page.attempts === 0) {
+          page.finalUrl = null;
+          page.waitedMs = null;
+        }
+        return;
+      }
       if (error instanceof FetchError) {
         page.attempts += error.attempts;
         if (error.statusCode != null) {
@@ -207,7 +216,14 @@ async function runWorker(frontier, gate, robots, http, clock, logger, startOrigi
       frontier.commit(item);
     } catch (error) {
       item.links = [];
-      if (!(error instanceof BudgetStop)) {
+      if (error instanceof BudgetStop) {
+        if (item.page.state === "fetching") {
+          skipPage(item.page, "budget");
+          if (item.page.attempts === 0) {
+            item.page.waitedMs = null;
+          }
+        }
+      } else {
         frontier.fail(error, logger);
         throw error;
       }
