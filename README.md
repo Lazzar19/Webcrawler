@@ -181,7 +181,7 @@ pages
   skipped   -       1      https://example.com/outside   other-origin
 ```
 
-`--format json --trace` prints the JSON report on stdout and the summary on stderr. Trace lines follow that summary and are not part of the JSON. The crawl does not emit those lines yet, so stderr is the summary alone. The JSON from one run is under [Sample report](#sample-report).
+`--format json --trace` prints the JSON report on stdout and the summary on stderr. Trace lines follow that summary and are not part of the JSON. The JSON from one run is under [Sample report](#sample-report).
 
 To crawl some other origin:
 

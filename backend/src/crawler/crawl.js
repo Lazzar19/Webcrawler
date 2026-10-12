@@ -6,6 +6,7 @@ const { createPolitenessGate } = require("./politeness");
 const { createRobotsManager } = require("./robots-manager");
 const { createFrontier } = require("./frontier");
 const { canonicalKey, extractLinks } = require("./url-policy");
+const { emitTrace } = require("./trace");
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const HOP_LIMIT = 5;
@@ -29,7 +30,7 @@ function skipPage(page, skipReason) {
   page.skipReason = skipReason;
 }
 
-async function fetchRecord(item, lease, http, robots, frontier, clock, startOrigin, config, logger) {
+async function fetchRecord(item, lease, http, robots, frontier, clock, startOrigin, config, logger, trace) {
   const page = item.page;
   let currentUrl = page.requestedUrl;
   page.finalUrl = currentUrl;
@@ -134,11 +135,21 @@ async function fetchRecord(item, lease, http, robots, frontier, clock, startOrig
       chain.push(hopKey);
 
       const decision = await robots.check(resolved.href, { beforeAttempt: lease.beforeAttempt });
+      emitTrace(trace, "robots-check", {
+        url: resolved.href,
+        allowed: decision.allowed,
+        reason: decision.reason,
+      });
       if (!decision.allowed) {
         skipPage(page, decision.reason);
         item.links = [];
         return;
       }
+      emitTrace(trace, "redirect", {
+        from: currentUrl,
+        to: resolved.href,
+        status: response.statusCode,
+      });
       currentUrl = resolved.href;
       continue;
     }
@@ -156,6 +167,10 @@ async function fetchRecord(item, lease, http, robots, frontier, clock, startOrig
 
     try {
       item.links = extractLinks(response.body, page.finalUrl, logger);
+      emitTrace(trace, "links", {
+        url: page.finalUrl,
+        discovered: item.links.length,
+      });
       page.state = "ok";
     } catch (error) {
       failPage(page, "parse", error.message);
@@ -165,7 +180,7 @@ async function fetchRecord(item, lease, http, robots, frontier, clock, startOrig
   }
 }
 
-async function runWorker(frontier, gate, robots, http, clock, logger, startOrigin, config) {
+async function runWorker(frontier, gate, robots, http, clock, logger, startOrigin, config, trace) {
   for (;;) {
     const item = await frontier.take();
     if (item === null) {
@@ -177,12 +192,17 @@ async function runWorker(frontier, gate, robots, http, clock, logger, startOrigi
       const decision = await robots.check(item.page.requestedUrl, {
         beforeAttempt: lease.beforeAttempt,
       });
+      emitTrace(trace, "robots-check", {
+        url: item.page.requestedUrl,
+        allowed: decision.allowed,
+        reason: decision.reason,
+      });
       if (!decision.allowed) {
         item.page.state = "skipped";
         item.page.skipReason = decision.reason;
         item.links = [];
       } else {
-        await fetchRecord(item, lease, http, robots, frontier, clock, startOrigin, config, logger);
+        await fetchRecord(item, lease, http, robots, frontier, clock, startOrigin, config, logger, trace);
       }
       frontier.commit(item);
     } catch (error) {
@@ -196,6 +216,16 @@ async function runWorker(frontier, gate, robots, http, clock, logger, startOrigi
       frontier.commit(item);
     }
   }
+}
+
+function traceStopReason(frontier) {
+  if (frontier.fatalError) {
+    return "fatal";
+  }
+  if (frontier.stopping) {
+    return "interrupted";
+  }
+  return "completed";
 }
 
 function countsFor(pages, reserved) {
@@ -222,6 +252,7 @@ async function crawl(configInput, dependencies = {}) {
     retryCount: config.retryCount,
     retryBaseDelayMs: config.retryBaseDelayMs,
     fatalSignal: fatalControl.signal,
+    trace: dependencies.trace,
   });
   const robots = createRobotsManager({
     http,
@@ -241,6 +272,7 @@ async function crawl(configInput, dependencies = {}) {
     onFatal() {
       fatalControl.abort();
     },
+    trace: dependencies.trace,
   });
   const startedAt = clock.now();
   const signal = dependencies.signal;
@@ -254,11 +286,22 @@ async function crawl(configInput, dependencies = {}) {
     }
   }
 
+  emitTrace(dependencies.trace, "crawl-start", { url: config.startUrl });
   frontier.reserveStart();
   const startOrigin = new URL(config.startUrl).origin;
   const workers = [];
   for (let index = 0; index < config.concurrency; index += 1) {
-    workers.push(runWorker(frontier, gate, robots, http, clock, logger, startOrigin, config));
+    workers.push(runWorker(
+      frontier,
+      gate,
+      robots,
+      http,
+      clock,
+      logger,
+      startOrigin,
+      config,
+      dependencies.trace,
+    ));
   }
 
   try {
@@ -268,6 +311,8 @@ async function crawl(configInput, dependencies = {}) {
       signal.removeEventListener("abort", onAbort);
     }
   }
+
+  emitTrace(dependencies.trace, "crawl-stop", { reason: traceStopReason(frontier) });
 
   if (frontier.fatalError) {
     throw frontier.fatalError;

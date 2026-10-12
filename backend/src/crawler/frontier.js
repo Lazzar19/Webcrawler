@@ -1,4 +1,5 @@
 const { canonicalKey } = require("./url-policy");
+const { emitTrace } = require("./trace");
 
 function requestedSpelling(input) {
   const url = new URL(input);
@@ -32,7 +33,7 @@ function blankPage(fields) {
   };
 }
 
-function createFrontier({ config, clock, onFatal }) {
+function createFrontier({ config, clock, onFatal, trace }) {
   const startOrigin = new URL(requestedSpelling(config.startUrl)).origin;
   const pages = [];
   const queue = [];
@@ -53,6 +54,11 @@ function createFrontier({ config, clock, onFatal }) {
     pages.push(page);
     queue.push(item);
     fetchReservations += 1;
+    emitTrace(trace, "reserved", {
+      url: page.requestedUrl,
+      depth: page.depth,
+      reason: page.discoveredFrom === null ? "start" : "discovered",
+    });
     return item;
   }
 
@@ -61,6 +67,10 @@ function createFrontier({ config, clock, onFatal }) {
     const item = { page, sequence: null, committed: true, links: [] };
     seen.set(page.canonicalUrl, item);
     pages.push(page);
+    emitTrace(trace, "skipped", {
+      url: page.requestedUrl,
+      reason: skipReason,
+    });
     return item;
   }
 
@@ -133,6 +143,11 @@ function createFrontier({ config, clock, onFatal }) {
       nextSequence += 1;
       item.takenAt = clock.now();
       inFlight += 1;
+      emitTrace(trace, "take", {
+        url: item.page.requestedUrl,
+        depth: item.page.depth,
+        sequence: item.sequence,
+      });
       resolve(item);
     }
 
@@ -154,6 +169,10 @@ function createFrontier({ config, clock, onFatal }) {
           reserveLinks(item, item.links);
         }
       } finally {
+        emitTrace(trace, "commit", {
+          sequence: item.sequence,
+          state: item.page.state,
+        });
         nextCommit += 1;
       }
     }
@@ -199,6 +218,9 @@ function createFrontier({ config, clock, onFatal }) {
       }
       fatalError = error;
       stopping = true;
+      emitTrace(trace, "fatal", {
+        message: error instanceof Error ? error.message : String(error),
+      });
       if (onFatal) {
         onFatal();
       }

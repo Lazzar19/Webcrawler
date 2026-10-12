@@ -3,6 +3,7 @@ const { ConfigError } = require("../crawler/crawl-config.js");
 const { crawl } = require("../crawler/crawl.js");
 const { renderReport, normalizeFormat } = require("../report/render.js");
 const { createCliConfig } = require("./cli-config.js");
+const { formatTrace } = require("../crawler/trace.js");
 
 const EXIT_OK = 0;
 const EXIT_FATAL = 1;
@@ -35,6 +36,7 @@ async function runCli(argv, dependencies = {}) {
   }
 
   const stop = new AbortController();
+  const traceLines = [];
   let interrupts = 0;
   let secondInterrupt = false;
   const onSigint = () => {
@@ -49,7 +51,14 @@ async function runCli(argv, dependencies = {}) {
   signals.on("SIGINT", onSigint);
 
   try {
-    const result = await crawlImpl(invocation.config, { signal: stop.signal });
+    const result = await crawlImpl(invocation.config, {
+      signal: stop.signal,
+      trace: invocation.trace
+        ? (event, fields) => {
+          traceLines.push(formatTrace(event, fields));
+        }
+        : undefined,
+    });
     if (secondInterrupt) {
       return EXIT_SECOND_INTERRUPT;
     }
@@ -57,7 +66,7 @@ async function runCli(argv, dependencies = {}) {
       format,
       output: invocation.output,
       details: invocation.details,
-      trace: invocation.trace ? (dependencies.traceText ?? "") : "",
+      trace: traceLines.join(""),
     });
     if (rendered.file) {
       writeFile(rendered.file.path, rendered.file.text);
@@ -68,6 +77,9 @@ async function runCli(argv, dependencies = {}) {
     stdout.write(rendered.stdout);
     return EXIT_OK;
   } catch (error) {
+    if (traceLines.length > 0) {
+      stderr.write(traceLines.join(""));
+    }
     writeLine(stderr, error.message);
     return EXIT_FATAL;
   } finally {

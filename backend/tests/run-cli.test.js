@@ -149,30 +149,32 @@ test("a value on --details or --trace exits 2 and does not crawl", async () => {
   }
 });
 
-test("--trace places its text on stderr and never on stdout", async () => {
-  const trace = "[trace] crawl-stop reason=completed\n";
+test("--trace places sink lines on stderr and never on stdout", async () => {
+  const line = "[trace] crawl-stop reason=completed\n";
+  function note(config, { trace }) {
+    expect(config).not.toHaveProperty("trace");
+    trace("crawl-stop", { reason: "completed" });
+    return resultFor(config.startUrl);
+  }
+
   const jsonIo = streams();
   const jsonCode = await runCli(["https://example.com/", "--format", "json", "--trace"], {
     ...jsonIo,
     signals: new EventEmitter(),
-    traceText: trace,
-    crawl(config) {
-      expect(config).not.toHaveProperty("trace");
-      return resultFor(config.startUrl);
-    },
+    crawl: note,
   });
   expect(jsonCode).toBe(0);
   expect(JSON.parse(jsonIo.out()).startUrl).toBe("https://example.com/");
   expect(jsonIo.out()).not.toContain("[trace]");
   expect(jsonIo.err().startsWith("completed https://example.com/")).toBe(true);
-  expect(jsonIo.err().endsWith(trace)).toBe(true);
+  expect(jsonIo.err().endsWith(line)).toBe(true);
 
   const quiet = streams();
   await runCli(["https://example.com/", "--format", "json"], {
     ...quiet,
     signals: new EventEmitter(),
-    traceText: trace,
-    crawl(config) {
+    crawl(config, options) {
+      expect(options.trace).toBeUndefined();
       return resultFor(config.startUrl);
     },
   });
@@ -186,19 +188,16 @@ test("--trace places its text on stderr and never on stdout", async () => {
     {
       ...fileIo,
       signals: new EventEmitter(),
-      traceText: trace,
       writeFile(path, text) {
         written = { path, text };
       },
-      crawl(config) {
-        return resultFor(config.startUrl);
-      },
+      crawl: note,
     },
   );
   expect(fileCode).toBe(0);
   expect(fileIo.out().startsWith("completed https://example.com/")).toBe(true);
   expect(fileIo.out()).not.toContain("[trace]");
-  expect(fileIo.err()).toBe(trace);
+  expect(fileIo.err()).toBe(line);
   expect(written.path).toBe("out.json");
   expect(JSON.parse(written.text).startUrl).toBe("https://example.com/");
   expect(written.text).not.toContain("[trace]");
@@ -210,19 +209,16 @@ test("--trace places its text on stderr and never on stdout", async () => {
     {
       ...detailsIo,
       signals: new EventEmitter(),
-      traceText: trace,
       writeFile(_path, text) {
         detailsFile = text;
       },
-      crawl(config) {
-        return resultFor(config.startUrl);
-      },
+      crawl: note,
     },
   );
   expect(detailsCode).toBe(0);
   expect(detailsIo.out()).toContain("pages");
   expect(detailsIo.out()).not.toContain("[trace]");
-  expect(detailsIo.err()).toBe(trace);
+  expect(detailsIo.err()).toBe(line);
   expect(detailsFile).toBe(detailsIo.out());
 });
 

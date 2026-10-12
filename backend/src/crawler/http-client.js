@@ -1,3 +1,5 @@
+const { emitTrace } = require("./trace");
+
 const ACCEPT = "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1";
 
 class FetchError extends Error {
@@ -147,6 +149,7 @@ function createHttpClient({
   retryCount = 0,
   retryBaseDelayMs = 500,
   fatalSignal,
+  trace,
 } = {}) {
   const fetchFn = fetchImpl ?? fetch;
   const now = () => clock.now();
@@ -160,6 +163,7 @@ function createHttpClient({
       let attempts = 0;
       let started = null;
       let pendingStatus = null;
+      let pendingKind = null;
       let pendingRetryAfter = null;
       let pendingResult = null;
 
@@ -175,6 +179,13 @@ function createHttpClient({
           if (wait === null) {
             return pendingResult;
           }
+          const retryFields = { url, next: attempts + 1, wait };
+          if (pendingStatus != null) {
+            retryFields.status = pendingStatus;
+          } else {
+            retryFields.kind = pendingKind;
+          }
+          emitTrace(trace, "retry", retryFields);
           await sleepOrAbort(wait, clock, fatalSignal);
         }
 
@@ -183,6 +194,7 @@ function createHttpClient({
           started = now();
         }
         attempts += 1;
+        emitTrace(trace, "attempt-start", { url, attempt: attempts });
         const signal = AbortSignal.timeout(timeoutMs);
         let headerStatus = null;
         let headerContentType = null;
@@ -240,6 +252,7 @@ function createHttpClient({
             return result;
           }
           pendingStatus = statusCode;
+          pendingKind = null;
           pendingRetryAfter = retryAfter;
           pendingResult = result;
         } catch (error) {
@@ -257,6 +270,7 @@ function createHttpClient({
             throw failure;
           }
           pendingStatus = null;
+          pendingKind = failure.kind;
           pendingRetryAfter = null;
           pendingResult = null;
         }
