@@ -348,7 +348,7 @@ The file is `${origin}/robots.txt`. The product token is the configured `userAge
 ### Output and shutdown
 
 - The engine returns a `CrawlResult`. Reporters format it. The engine does not write files and does not choose a Desktop path.
-- There is no Desktop report. `printReport`, `getDesktopPath`, and `saveToCSV` are deleted in Milestone 3. Nothing writes a CSV because the platform looks like Windows, WSL, or macOS. A file is written only when the CLI is given `--output`.
+- There is no Desktop report. `printReport`, `getDesktopPath`, `saveToCSV`, and `sortPages` are gone. Nothing writes a CSV because the platform looks like Windows, WSL, or macOS. A file is written only when the CLI is given `--output`.
 - Formats: console summary, JSON, and CSV. CSV is the machine table, not the human report. Its quoting covers commas, quotes, and newlines. Its columns are the `PageResult` fields in contract order. `null` is an empty cell. JSON is `CrawlResult` with no extra fields.
 - The console summary is the default human report. It replaces the one-line `Crawled N pages, ...` string and the old `Found N links to page ...` lines. Pages stay in creation order. There is no hit-count sort. A `null` field is omitted, not printed as `null`.
 - The summary is exactly these lines, with a blank line between the three blocks. Counts are always printed, including zeros.
@@ -380,7 +380,7 @@ robots https://example.com allow-all 404
 - The CSV's first row is the `PageResult` field names in contract order. Each later row is one page. `null` is an empty cell. A cell that contains a comma, a quote, or a newline is wrapped in quotes, and each quote inside it is doubled.
 - A failed `--output` write prints the error on stderr, does not print the report, and exits `1`.
 - The first SIGINT aborts the crawl signal. In-flight work finishes, the partial result is reported, and the process exits `0`. The second SIGINT exits `130` immediately and does not write the report.
-- This report is Milestone 3. Milestone 2 does not print it and does not delete `report.js`.
+- The old writer in `backend/src/crawler/report.js` is gone. Reporters live under `backend/src/report/` and do not choose a path.
 - On the first SIGINT, stop handing out queued items, let in-flight items finish including their retries, reserve nothing from any commit after the signal (the stopping rule in Commit order), write the partial `CrawlResult` with `stopReason: "interrupted"`, and exit `0`. A second SIGINT exits `130` immediately without writing.
 
 ### Result shapes
@@ -467,7 +467,7 @@ Integration tests use a real server, not a `fetch` mock.
 
 ## Current Status
 
-**Active milestone:** Milestone 3 - CLI and reports. Exit codes and the three report formats are in place. Deleting the Desktop writer has not started.
+**Active milestone:** Milestone 3 - CLI and reports. The Desktop writer and the hit-count sort are gone. The child-process CLI test has not started.
 
 **Known behavior of the code today:**
 
@@ -487,7 +487,7 @@ Integration tests use a real server, not a `fetch` mock.
 - `[x]` Retries stay inside the HTTP client. `timeout`, `connect`, `reset`, and `429`/`500`/`502`/`503`/`504` retry. `dns`, `tls`, `too-large`, redirects, and every other status do not. Backoff runs through the clock before `beforeAttempt`. `Retry-After` on `429` or `503` can only raise that wait, and a wait above 5000 ms returns the response. Fatal-stop ends the sleep and does not abort `fetch`.
 - `[x]` `robots-parser` decides allow and crawl-delay. One `robots.txt` fetch is shared per origin, on the worker's existing lease. A disallowed path is `skipped` / `robots` and is not requested. An unavailable file is `skipped` / `robots-unavailable`. The custom parser is gone.
 - `[x]` The politeness gate is a per-origin FIFO of leases. `beforeAttempt` claims `nextAllowedAt` before it waits. The gap is `minIntervalMs` until a parsed crawl-delay is larger, then that delay, capped at 10 seconds. `waitedMs` runs from `take()` through that page's own gap. Fatal-stop ends the wait and does not release a held lease.
-- `[!]` `printReport` still writes a CSV onto a guessed Desktop path, including a Windows path when run from WSL. The macOS branch is unreachable. `npm start` does not call it. Deleting `getDesktopPath`, `saveToCSV`, and `printReport` is the next Milestone 3 item.
+- `[x]` A file is written only for `--output`. There is no guessed Desktop path. Console, JSON, and CSV keep `pages` in creation order.
 - `[x]` Node is pinned to 24, and ESLint checks `backend/`.
 
 ## Milestones
@@ -592,8 +592,8 @@ The console summary in Output is not part of this milestone.
 - `[x]` Validate the URL and every number. Preserve an explicit `0` for depth. Unknown flags are errors.
 - `[x]` Use exit codes `0`, `1`, `2`, and `130` as specified above.
 - `[x]` Emit the console summary from Output, plus JSON and CSV, from `CrawlResult`, following the one-artifact-on-stdout rule. CSV escapes commas, quotes, and newlines. The console text matches the sample, including a skipped page, a failed page, a redirect `final` suffix, and a robots line.
-- `[ ]` Write files only to `--output`. Delete `getDesktopPath`, `saveToCSV`, and `printReport` in that change. No guessed Desktop path remains.
-- `[ ]` Delete `sortPages` and rewrite [backend/tests/report.test.js](backend/tests/report.test.js). The console summary and every other reporter keep `pages` in creation order. The hit-count sort goes away with the Desktop writer.
+- `[x]` Write files only to `--output`. Delete `getDesktopPath`, `saveToCSV`, and `printReport` in that change. No guessed Desktop path remains.
+- `[x]` Delete `sortPages` and rewrite [backend/tests/report.test.js](backend/tests/report.test.js). The console summary and every other reporter keep `pages` in creation order. The hit-count sort goes away with the Desktop writer.
 - `[x]` On SIGINT, stop handing out items, finish in-flight work, and emit the partial result.
 - `[ ]` Test the CLI as a child process against the fixture: bad arguments, explicit `0`, JSON shape, JSON on stdout being parseable, CSV escaping, and a crawl that includes a failed page.
 
@@ -763,7 +763,7 @@ Included in the Milestone 1 checkpoint approved on 2026-10-08.
 
 #### Retired behavior
 
-The old crawl locks below were rewritten with the frontier and the result contract. One reporter lock remains, and it belongs to Milestone 3.
+The old crawl locks below were rewritten with the frontier and the result contract. The hit-count reporter was removed with the Desktop writer.
 
 - Keys without a scheme. Rewritten. Lookups are full keys such as `https://example.com/pageA`, and `http` and `https` stay different.
 - `about:blank` resolution. Rewritten. `href="invalid"` on base `https://blog.boot.dev` resolves to `https://blog.boot.dev/invalid`. Resolved spellings still keep a trailing slash. Only the key drops it.
@@ -771,7 +771,7 @@ The old crawl locks below were rewritten with the frontier and the result contra
 - The hit-count map. Rewritten. The engine stores one `PageResult` per key. A non-HTML response is `skipped` / `non-html`. Repeat discoveries do not increment a count.
 - Exclusive depth. Rewritten. `maxDepth` is inclusive. A link past the limit is a `depth-limit` record, and the page at the limit is fetched.
 - Dropped external links. Rewritten. An external link is a `skipped` / `other-origin` record.
-- `sortPages`. Still locked by [backend/tests/report.test.js](backend/tests/report.test.js), which expects rows ordered by descending hit count. The engine already returns `pages` in creation order. The reporter rewrite is Milestone 3, next to removing the Desktop path.
+- `sortPages`. Rewritten. Console, JSON, and CSV keep `pages` in creation order. The hit-count sort and the Desktop writer are gone.
 
 #### Worker loop
 
@@ -1008,7 +1008,29 @@ These replace the looser readings from the first draft of this checkpoint.
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 247 tests. The console fixture matches the sample, including a skipped page, a failed page, a redirect `final` suffix, and a robots line.
 - **Lesson learned:** The summary is a view of `CrawlResult`. It does not sort, drop pages, or recompute the counts.
 
+### 2026-10-12 - Desktop writer
+
+- **Problem:** `printReport` still guessed a Desktop path, including a Windows path from WSL, and wrote a hit-count CSV there. `npm start` did not call it, but the function was still in the tree.
+- **Chosen solution:** Delete `getDesktopPath`, `saveToCSV`, and `printReport` with `backend/src/crawler/report.js`. A file is written only when `--output` is set, and that path is the one the user gave. The source tree has no `Desktop` guess.
+- **How it was verified:** `npm run verify`. Lint is clean. A test reads `backend/src` and rejects `getDesktopPath`, `saveToCSV`, `printReport`, and `Desktop`.
+- **Lesson learned:** An unused writer is still a writer. The safe path is the one the CLI was given, not a path chosen from the operating system.
+
+### 2026-10-12 - Creation order
+
+- **Problem:** `sortPages` still ordered a hit-count map, and `report.test.js` locked that order. The crawl result is already in creation order.
+- **Chosen solution:** Delete `sortPages`. `report.test.js` now locks console, JSON, and CSV to the `pages` array order. A later URL is not moved ahead of an earlier one.
+- **How it was verified:** `npm run verify`. Lint is clean. The order test uses `https://example.com/z` before `https://example.com/a`.
+- **Lesson learned:** Creation order is the report order. A sort by hits or by URL would tell a different story from the crawl.
+
 ## Change Log
+
+### 2026-10-12 (Creation order)
+
+- `sortPages` is gone. Console, JSON, and CSV keep `pages` in creation order.
+
+### 2026-10-12 (Desktop writer)
+
+- `getDesktopPath`, `saveToCSV`, and `printReport` are gone with `backend/src/crawler/report.js`. A file is written only for `--output`.
 
 ### 2026-10-12 (Report formats)
 
