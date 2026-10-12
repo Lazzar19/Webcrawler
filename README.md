@@ -72,7 +72,7 @@ The first Ctrl+C stops handing out queued work, lets in-flight requests finish, 
 | `--format` | stdout format | `console` |
 | `--output` | file path | none |
 
-An omitted flag uses the default. `--depth 0` is a real setting, not "missing". `--format` is `console`, `json`, or `csv`. With `json` or `csv` and no `--output`, that format is the only thing on stdout and the summary goes to stderr. `--output` writes the chosen format to that path, and the summary stays on stdout.
+An omitted flag uses the default. `--depth 0` is a real setting, not "missing". `--format` is `console`, `json`, or `csv`. With `json` or `csv` and no `--output`, that format is the only thing on stdout and the summary goes to stderr. `--output` writes the chosen format to that path, and the summary stays on stdout. `--details` adds a page table after the summary. It takes no value, and `--format json --details` or `--format csv --details` exits `2` before a crawl. `--trace` takes no value. Its lines go to stderr and never to stdout. When the summary is already on stderr, the lines follow it. Otherwise stderr is only those lines.
 
 ## Design decisions
 
@@ -124,7 +124,7 @@ Retries for `timeout`, `connect`, `reset`, and statuses `429`, `500`, `502`, `50
 
 ### The report follows creation order
 
-Console, JSON, and CSV print `pages` in the order the records were created. A file is written only for `--output`.
+JSON, CSV, and `--details` list `pages` in the order the records were created. The default console is a count summary and does not list those URLs. A file is written only for `--output`.
 
 ## Demo
 
@@ -136,20 +136,52 @@ node backend/tests/fixtures/demo.js
 ```
 
 ```text
-completed http://127.0.0.1:9/ 125ms
-reserved 5 fetched 4 ok 2 skipped 3 failed 1 queued 0
+completed http://127.0.0.1:9/ 104ms
 
-ok 200 http://127.0.0.1:9/ depth 0
-ok 200 http://127.0.0.1:9/docs depth 1
-failed 404 http://127.0.0.1:9/missing depth 1 http-status HTTP 404
-skipped http://127.0.0.1:9/notes.txt depth 1 non-html
-skipped http://127.0.0.1:9/secret depth 1 robots
-skipped https://example.com/outside depth 1 other-origin
+crawl
+  reserved  5
+  fetched   4
+  ok        2
+  skipped   3
+  failed    1
+  queued    0
 
-robots http://127.0.0.1:9 parsed 200
+skipped
+  non-html      1
+  other-origin  1
+  robots        1
+
+failed
+  http-status  1
+
+robots
+  http://127.0.0.1:9  parsed 200
 ```
 
-`/secret` was not requested. Neither was `https://example.com/outside`. `/secret` still counts as reserved, because the reservation happens before the robots check. The outside link does not.
+`/secret` was not requested. Neither was `https://example.com/outside`. `/secret` still counts as reserved, because the reservation happens before the robots check. The outside link does not. The summary does not print those URLs.
+
+The same demo takes the report flags. These three commands are the check for the terminal report:
+
+```bash
+node backend/tests/fixtures/demo.js
+node backend/tests/fixtures/demo.js --details
+node backend/tests/fixtures/demo.js --format json --trace
+```
+
+The first command is the summary above. `--details` prints that summary, then the page table. Rows stay in creation order. A URL longer than 64 characters is shortened only in this table. These rows are from the same run:
+
+```text
+pages
+  STATE     STATUS  DEPTH  URL                           REASON
+  ok        200     0      http://127.0.0.1:9/           -
+  ok        200     1      http://127.0.0.1:9/docs       -
+  failed    404     1      http://127.0.0.1:9/missing    http-status
+  skipped   -       1      http://127.0.0.1:9/notes.txt  non-html
+  skipped   -       1      http://127.0.0.1:9/secret     robots
+  skipped   -       1      https://example.com/outside   other-origin
+```
+
+`--format json --trace` prints the JSON report on stdout and the summary on stderr. Trace lines follow that summary and are not part of the JSON. The crawl does not emit those lines yet, so stderr is the summary alone. The JSON from one run is under [Sample report](#sample-report).
 
 To crawl some other origin:
 

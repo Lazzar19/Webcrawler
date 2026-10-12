@@ -685,7 +685,7 @@ Integration tests use a real server, not a `fetch` mock.
 
 ## Current Status
 
-**Active milestone:** Milestone 6 - Terminal output. Milestones 0–5 are complete. The summary, `--details`, the flag rejections, and the stream placement are in. The trace sink and the README sample have not started.
+**Active milestone:** Milestone 6 - Terminal output. Milestones 0–5 are complete. Part A is complete: the summary, `--details`, the flag rejections, the stream placement, and the README sample. Part B, the trace sink, has not started.
 
 **Known behavior of the code today:**
 
@@ -860,7 +860,7 @@ Part A, summary and details:
 - `[x]` Reject `--format json --details` and `--format csv --details` as a `ConfigError` before a crawl. Reject `--details=true` and `--trace=1`.
 - `[x]` Follow the stream table, including `--output` with and without `--trace` and `--details`.
 - `[x]` Rewrite the console assertions in the reporter, CLI, and demo tests. Default stdout has the crawl counts and does not list page URLs. `--details` lists them in order. JSON and CSV keep the full URL.
-- `[ ]` Update the README console sample and add the three commands in Output's verification list.
+- `[x]` Update the README console sample and add the three commands in Output's verification list.
 
 Part B, trace:
 
@@ -934,7 +934,9 @@ Broken-link detection is already implied by failed `PageResult` records. It does
 |---|---|---|
 | Lint | `npm run lint` | No errors in `backend/src` and `backend/tests` |
 | Tests | `npm test` | Backend unit tests and the local HTTP fixture |
-| CLI demo | README command | Fixture crawl prints the Output summary and exits 0 |
+| CLI summary | `node backend/tests/fixtures/demo.js` | Prints the Output summary, lists no page URL, and exits 0 |
+| CLI details | `node backend/tests/fixtures/demo.js --details` | Prints that summary, then the page table, and exits 0 |
+| CLI JSON trace | `node backend/tests/fixtures/demo.js --format json --trace` | JSON on stdout. The summary, then trace text, on stderr. Exits 0 |
 | CI | GitHub Actions on `main` and pull requests | Lint and tests, Node from `backend/.nvmrc` |
 | Image | `docker build` then the README demo | Only after Milestone 5 |
 
@@ -1392,7 +1394,18 @@ Approved: 2026-10-12. The README sections Design decisions and Known limitations
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 276 tests. A child process against the fixture exits `2` for the rejected forms and does not record a request.
 - **Lesson learned:** The place a line is printed can be locked before the line exists. The sink still has to emit the events; placement does not replay `CrawlResult`.
 
+### 2026-10-12 - README console sample
+
+- **Problem:** The README still showed one line per page, so the first sample a reader saw was the report Milestone 6 retired.
+- **Chosen solution:** The demo sample is the count summary from one fixture run, with the port written as `9`. The README lists the plain demo, `--details` with the page table from that run, and `--format json --trace`. It says trace lines are not emitted yet. The Verification table names those three commands.
+- **How it was verified:** `node backend/tests/fixtures/demo.js --format json`, then the summary and the details table rendered from that result after the origin was rewritten to port `9`. `npm run verify` stays green. The suite has 276 tests.
+- **Lesson learned:** A sample that still lists every URL teaches the old report. The command list has to match the text the formatter prints.
+
 ## Change Log
+
+### 2026-10-12 (README console sample)
+
+- The README demo shows the count summary, the `--details` table, and `--format json --trace`. The Verification table lists those three commands. Trace events are still not emitted.
 
 ### 2026-10-12 (Flag rejection and stream placement)
 
