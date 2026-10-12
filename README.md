@@ -9,7 +9,7 @@ A single-process command-line crawler. It fetches one origin, keeps a record for
 
 ## About
 
-The engine is a fixed set of workers pulling from one queue. URL identity, robots, timeouts, and politeness are separate decisions, and the tests lock them against a local HTTP server. [PLAN.md](PLAN.md) is the contract. This file is the tour.
+The engine is a fixed set of workers pulling from one queue. URL identity, robots, timeouts, politeness, trap guards, and content identity are separate decisions, and the tests lock them against a local HTTP server. [PLAN.md](PLAN.md) is the contract. This file is the tour.
 
 ## How a crawl works
 
@@ -17,15 +17,27 @@ The engine is a fixed set of workers pulling from one queue. URL identity, robot
 
 One crawl owns one FIFO queue and a `seen` map from canonical key to the record that owns it. `concurrency` is the number of worker loops, and that number is also the cap on in-flight work.
 
-The start URL is reserved first, at depth 0. For each later link the first matching rule wins. A key already in `seen` is ignored. A different origin is `skipped` / `other-origin`. A link past `maxDepth` is `skipped` / `depth-limit`. When fetch reservations have already reached `maxPages`, the link is `skipped` / `page-limit`. Otherwise it is queued. The check and the insert happen together, with no await between them.
+The start URL is reserved first, at depth 0, and it is fetched even when its own key would trip a trap guard. For each later link the first matching rule wins. A key already in `seen` is ignored. A different origin is `skipped` / `other-origin`. A link past `maxDepth` is `skipped` / `depth-limit`. A canonical key longer than `maxUrlLength` is `skipped` / `url-length`. A path deeper than `maxPathDepth` is `skipped` / `path-depth`. A non-empty segment that occurs more than `maxSegmentRepeats` times is `skipped` / `repeated-segment`. When fetch reservations have already reached `maxPages`, the link is `skipped` / `page-limit`. Otherwise it is queued. The check and the insert happen together, with no await between them.
 
-`maxDepth` is inclusive. A page at the limit is fetched, and its new links become `depth-limit` records. `maxPages` counts fetch reservations, including the start URL. An other-origin skip, a depth skip, and a page-limit skip do not take a slot. A robots disallow does: the URL was reserved before the check.
+The trap checks read the canonical key, after depth and before `maxPages`. Length is the JavaScript length of that key. Path depth splits the path and counts the segments after the leading slash, including an empty segment between slashes, so `/` is 0 and `/a//b` is 3. The query is not counted. A repeated segment is an exact, case-sensitive count. The first match wins: length, then path depth, then a repeated segment. A hit enters `seen`, is not fetched, and does not take a slot.
+
+`maxDepth` is inclusive. A page at the limit is fetched, and its new links become `depth-limit` records. `maxPages` counts fetch reservations, including the start URL. An other-origin skip, a depth skip, a trap skip, and a page-limit skip do not take a slot. A robots disallow does: the URL was reserved before the check.
 
 ### Commit order
 
 Workers finish in network order. That order cannot decide which links are queued, or two runs would diverge.
 
-`take()` assigns a sequence number, `0`, then `1`, then `2`, before the worker starts the request. A finished item waits in a buffer. The frontier reserves links only for the next sequence number, then advances. A skipped or failed item commits an empty link list, so a hole cannot stall the queue. After Ctrl+C or a fatal error the counter still advances, and nothing new is reserved.
+`take()` assigns a sequence number, `0`, then `1`, then `2`, before the worker starts the request. A finished item waits in a buffer. The frontier reserves links only for the next sequence number, then advances. A skipped or failed item commits an empty link list, so a hole cannot stall the queue. After Ctrl+C, a budget stop, or a fatal error the counter still advances, and nothing new is reserved. A canonical target is included in that rule.
+
+### Content identity
+
+Two URLs can still be different keys and the same HTML. That decision waits until the page commits, in dequeue order, so the worker that finishes first does not own the body. The hash is SHA-256 of the decoded body. An empty body has a hash. A non-HTML page, a failed page, and a page whose parser throws do not enter the set.
+
+A hash that is already stored makes the page `skipped` / `duplicate-content`. The status, content type, byte length, and attempts stay. Its links are not reserved, and a canonical target is not reserved either.
+
+The other commit rule reads the first `<link>` whose `rel` includes the token `canonical`. A later tag is ignored. A href that does not parse, has a username or password, is not `http` or `https`, leaves the start origin, or names this same record is ignored. Any other key makes the page `skipped` / `canonical`. Its own links are not reserved. The target is discovered at the same depth, through the origin, trap, and `maxPages` steps, with `discoveredFrom` set to this record. A target already in `seen` is not reserved again.
+
+`--no-dedupe-content` leaves the hash unused. `--no-canonical` leaves the tag unused. With both flags, links are reserved the way they were before this check.
 
 ### Stable order
 
@@ -39,7 +51,7 @@ The canonical key is the identity, not the request URL. It drops the fragment, o
 
 The HTTP client does not follow redirects. The worker handles `301`, `302`, `303`, `307`, and `308` one hop at a time, and stops after 5. A hop that stays on the start origin and is not already owned becomes an alias of this record. An alias does not take another `maxPages` slot. The record keeps its original depth and `discoveredFrom`. `finalUrl` is the last URL that was actually requested.
 
-A hop to another origin is `skipped` / `redirect-off-origin` and is not requested. A hop that returns to this chain is `failed` / `redirect-loop`. A sixth hop is `failed` / `redirect-limit`. A missing or unusable `Location` is `failed` / `bad-redirect`. A hop already owned by another record is `skipped` / `duplicate`.
+A hop to another origin is `skipped` / `redirect-off-origin` and is not requested. A hop that returns to this chain is `failed` / `redirect-loop`. A sixth hop is `failed` / `redirect-limit`. A missing or unusable `Location` is `failed` / `bad-redirect`. A hop already owned by another record is `skipped` / `duplicate`. A hop that trips a trap guard is `skipped` with that guard's reason and is not requested. The check runs after the duplicate check and before robots. The hop key is an alias, the record keeps the attempts and the last status, and `finalUrl` stays the last URL that was requested.
 
 ### Politeness
 
@@ -49,7 +61,11 @@ A hop to another origin is `skipped` / `redirect-off-origin` and is not requeste
 
 ### Failures
 
-A bad start URL or a bad flag stops the process before any fetch and exits `2`. A failed page is a record. The crawl continues, and a finished crawl exits `0` even when some pages failed. An unexpected exception exits `1`.
+A bad start URL or a bad flag stops the process before any fetch and exits `2`. A failed page is a record. The crawl continues, and a finished crawl exits `0` even when some pages failed. A crawl that stops for the budget also exits `0`. An unexpected exception exits `1`.
+
+`maxDurationMs` and `maxTotalAttempts` default to `null`. An omitted flag does not stop the crawl, and `0` is rejected. The duration is measured from the start of the crawl. The attempt cap counts every HTTP attempt that is about to start: the page, a retry, a redirect hop, and `robots.txt`. A claim that is already at the cap does not fetch. An attempt that already started can finish past the duration cap. The next claim is then refused.
+
+The first stop reason stays. A budget result prints `budget` where a finished crawl prints `completed`, and a later Ctrl+C does not replace it. A page that never starts a request is `skipped` / `budget`. A retry or a hop that already earned a failure or a redirect keeps that result. After the stop, queued URLs stay queued. There is no total-byte budget, and `--max-bytes` is not a flag.
 
 The page error kinds are `timeout`, `dns`, `connect`, `reset`, `tls`, `too-large`, `http-status`, `redirect-loop`, `redirect-limit`, `bad-redirect`, and `parse`. Non-HTML is `skipped` / `non-html`, and the body is not read. Retries cover `timeout`, `connect`, `reset`, and statuses `429`, `500`, `502`, `503`, and `504`. `dns`, `tls`, `too-large`, redirects, and every other status are not retried.
 
@@ -67,12 +83,19 @@ The first Ctrl+C stops handing out queued work, lets in-flight requests finish, 
 | `--per-origin` | `perOriginLimit` | `2` |
 | `--min-interval` | `minIntervalMs` | `200` |
 | `--timeout` | `timeoutMs` | `10000` |
+| `--max-duration` | `maxDurationMs` | `null` |
+| `--max-attempts` | `maxTotalAttempts` | `null` |
+| `--max-url-length` | `maxUrlLength` | `2048` |
+| `--max-path-depth` | `maxPathDepth` | `16` |
+| `--max-segment-repeats` | `maxSegmentRepeats` | `2` |
 | `--user-agent` | `userAgent` | `WebcrawlerBot/1.0 (+https://github.com/Lazzar19/webcrawler)` |
 | `--no-respect-robots` | `respectRobots` | `true` |
+| `--no-dedupe-content` | `dedupeContent` | `true` |
+| `--no-canonical` | `respectCanonical` | `true` |
 | `--format` | stdout format | `console` |
 | `--output` | file path | none |
 
-An omitted flag uses the default. `--depth 0` is a real setting, not "missing". `--format` is `console`, `json`, or `csv`. With `json` or `csv` and no `--output`, that format is the only thing on stdout and the summary goes to stderr. `--output` writes the chosen format to that path, and the summary stays on stdout. `--details` adds a page table after the summary. It takes no value, and `--format json --details` or `--format csv --details` exits `2` before a crawl. `--trace` takes no value. Its lines go to stderr and never to stdout. When the summary is already on stderr, the lines follow it. Otherwise stderr is only those lines.
+An omitted flag uses the default. `--depth 0` is a real setting, not "missing". `--max-duration`, `--max-attempts`, and the three trap flags reject `0`. `--no-respect-robots`, `--no-dedupe-content`, and `--no-canonical` take no value. A form such as `--no-dedupe-content=true` exits `2`. `--format` is `console`, `json`, or `csv`. With `json` or `csv` and no `--output`, that format is the only thing on stdout and the summary goes to stderr. `--output` writes the chosen format to that path, and the summary stays on stdout. `--details` adds a page table after the summary. It takes no value, and `--format json --details` or `--format csv --details` exits `2` before a crawl. `--trace` takes no value. Its lines go to stderr and never to stdout. When the summary is already on stderr, the lines follow it. Otherwise stderr is only those lines.
 
 ## Design decisions
 
@@ -88,7 +111,7 @@ One `crawl()` call creates its own frontier and `concurrency` worker loops. The 
 
 ### A URL is reserved before it is fetched
 
-The `seen` check and the insert are one synchronous step, so two workers cannot both accept the same key. `maxPages` counts those reservations. The count includes the start URL and a URL that robots later refuses. An other-origin link, a link past `maxDepth`, and a link past `maxPages` are records, and they do not take a reservation.
+The `seen` check and the insert are one synchronous step, so two workers cannot both accept the same key. `maxPages` counts those reservations. The count includes the start URL and a URL that robots later refuses. An other-origin link, a link past `maxDepth`, a link that trips a trap guard, and a link past `maxPages` are records, and they do not take a reservation. The start URL is still fetched when its own key would trip a guard.
 
 ### Links are reserved in dequeue order
 
@@ -102,7 +125,7 @@ Example. `concurrency` is 2 and `maxPages` is 4. The start page links to `/c` an
 
 ### Every redirect hop is checked
 
-The HTTP client returns a redirect and leaves it there. The worker handles `301`, `302`, `303`, `307`, and `308` one hop at a time, and stops after 5. Each hop is a scope check and a robots check before anyone requests it. A hop that stays on the start origin and is free becomes an alias of the same record. An alias does not take another `maxPages` slot. The record keeps its original depth and `discoveredFrom`. A hop to another origin is `skipped` / `redirect-off-origin` and is not requested. A hop that returns to this chain is `failed` / `redirect-loop`.
+The HTTP client returns a redirect and leaves it there. The worker handles `301`, `302`, `303`, `307`, and `308` one hop at a time, and stops after 5. Each hop is checked for scope, a loop, and a duplicate before a trap guard, and that guard runs before robots. A hop that stays on the start origin and is free becomes an alias of the same record. An alias does not take another `maxPages` slot. The record keeps its original depth and `discoveredFrom`. A hop to another origin is `skipped` / `redirect-off-origin` and is not requested. A hop that returns to this chain is `failed` / `redirect-loop`. A hop that trips a trap guard is not requested, and the robots rule does not hide that reason.
 
 ### Politeness is a second limit
 
@@ -121,6 +144,18 @@ A 2xx body is parsed. An empty 2xx body allows every path and sets no crawl-dela
 Bad configuration exits `2` before any fetch. A classified page failure is a record. The crawl continues, and a finished crawl exits `0`. An unexpected exception exits `1` after the workers return. The first Ctrl+C finishes in-flight work and prints `interrupted`. The second exits `130` and prints no report.
 
 Retries for `timeout`, `connect`, `reset`, and statuses `429`, `500`, `502`, `503`, and `504` stay on the same reservation. The worker holds its lease through the backoff.
+
+### A trap is refused before it takes a page
+
+`maxPages` is a count of URLs the crawl intends to fetch. A very long key, a deep path, or a repeated segment is skipped first, so it cannot fill that count. The start URL is the page the user named, so those guards do not apply to it. On a redirect they do, and they run before robots.
+
+### A budget stop is a result
+
+The duration and the attempt cap default to off. When one of them is set, the claim before the next HTTP attempt is what stops the crawl. The attempt that already passed the claim finishes. A page that never got a request is `skipped` / `budget`, and the process exits `0`. The first reason wins, so Ctrl+C after a budget stop still reports `budget`.
+
+### The same HTML does not feed the queue twice
+
+Reservation still deduplicates keys. The body is a second identity, decided when the page commits. The earlier sequence owns the hash. The later copy keeps the fetch and reserves nothing. A declared canonical URL is followed at the same depth, and the alias page's own links are not. Both switches default to on. Turning both off returns link reservation to the earlier crawl.
 
 ### The report follows creation order
 
@@ -232,6 +267,13 @@ docker run --rm --entrypoint node webcrawler backend/src/main.js https://example
     "retryBaseDelayMs": 500,
     "respectRobots": true,
     "userAgent": "WebcrawlerBot/1.0 (+https://github.com/Lazzar19/webcrawler)",
+    "maxDurationMs": null,
+    "maxTotalAttempts": null,
+    "maxUrlLength": 2048,
+    "maxPathDepth": 16,
+    "maxSegmentRepeats": 2,
+    "dedupeContent": true,
+    "respectCanonical": true,
     "startUrl": "http://127.0.0.1:9/"
   },
   "pages": [
