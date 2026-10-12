@@ -157,6 +157,25 @@ To crawl some other origin:
 node backend/src/main.js https://example.com/ --depth 1 --max-pages 20
 ```
 
+### Docker
+
+The image is built from the repository root. It uses the Node version in `backend/.nvmrc` and runs as a user other than root. The default command is the same fixture demo. Nothing in this repository publishes the image.
+
+```bash
+docker build -t webcrawler .
+docker run --rm webcrawler
+```
+
+```bash
+docker run --rm webcrawler --format json
+```
+
+To crawl another origin, replace the entrypoint:
+
+```bash
+docker run --rm --entrypoint node webcrawler backend/src/main.js https://example.com/ --depth 1 --max-pages 20
+```
+
 ## Sample report
 
 `node backend/tests/fixtures/demo.js --format json` prints the `CrawlResult` on stdout and the summary on stderr. This is one run of that command. `startedAt`, `finishedAt`, `durationMs`, and `waitedMs` change between runs. The port in the sample is `9`.

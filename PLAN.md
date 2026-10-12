@@ -467,12 +467,12 @@ Integration tests use a real server, not a `fetch` mock.
 
 ## Current Status
 
-**Active milestone:** Milestone 4 - CV cutoff. The README draft now has Design decisions and Known limitations. The author has not approved that draft. Milestone 5 has not started.
+**Active milestone:** Milestone 5 - Optional image. The checklist is complete. The image runs the fixture demo as a non-root user.
 
 **Known behavior of the code today:**
 
 - `[x]` A frontier crawl, config validation, a robots manager on `robots-parser`, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 257 tests.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 258 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
 - `[x]` `npm start` from `backend/` runs `src/main.js` through `runCli`. A bad URL or flag exits `2`. A finished crawl exits `0`, including when pages failed. A fatal error or a failed `--output` write exits `1`. The second SIGINT exits `130`. The default stdout artifact is the console summary. `--format json` or `csv` without `--output` puts that artifact on stdout and the summary on stderr. `--output` writes the chosen format and still prints the summary.
@@ -489,6 +489,7 @@ Integration tests use a real server, not a `fetch` mock.
 - `[x]` The politeness gate is a per-origin FIFO of leases. `beforeAttempt` claims `nextAllowedAt` before it waits. The gap is `minIntervalMs` until a parsed crawl-delay is larger, then that delay, capped at 10 seconds. `waitedMs` runs from `take()` through that page's own gap. Fatal-stop ends the wait and does not release a held lease.
 - `[x]` A file is written only for `--output`. There is no guessed Desktop path. Console, JSON, and CSV keep `pages` in creation order.
 - `[x]` Node is pinned to 24, and ESLint checks `backend/`.
+- `[x]` `docker build -t webcrawler .` then `docker run --rm webcrawler` runs the fixture demo. The image uses Node 24, a non-root user, and a deps stage that is not the runtime. The repository does not publish the image.
 
 ## Milestones
 
@@ -606,7 +607,7 @@ The console summary in Output is not part of this milestone.
 - `[x]` Document the queue, commit order, stable order, redirect identity, the politeness split, the failure model, and the defaults.
 - `[x]` Include one copy-paste demo against the local fixture and one sample JSON report.
 - `[x]` List known limitations: no JavaScript rendering, no subdomain crawl, no sitemap crawl, no resume, single process, UTF-8 decoding only, non-UTF-8 query bytes such as `%FF` and `%FE` sharing one key, `nofollow` not honored, a slow page delays reservation of later pages' links, and one origin's backoff holds a worker.
-- `[-]` Agent drafts the design-decisions and limitations sections. Author reviews and approves them.
+- `[x]` Agent drafts the design-decisions and limitations sections. Author reviews and approves them. Approved 2026-10-12.
 - `[x]` Add a learning-log entry for the queue, commit order, and robots fail-closed behavior.
 
 **Done when:** Milestones 0–3 are checked, and a reader can run the demo from the README alone.
@@ -617,10 +618,10 @@ The console summary in Output is not part of this milestone.
 
 Not required for the CV cutoff. Do this only after Milestone 4.
 
-- `[ ]` Add a Dockerfile pinned to the Node version in `backend/.nvmrc`.
-- `[ ]` Run as a non-root user. Multi-stage build if it keeps the image small.
-- `[ ]` Document `docker run` for the same fixture demo.
-- `[ ]` Keep publishing, registry credentials, and image scanners out of this repository.
+- `[x]` Add a Dockerfile pinned to the Node version in `backend/.nvmrc`.
+- `[x]` Run as a non-root user. Multi-stage build if it keeps the image small.
+- `[x]` Document `docker run` for the same fixture demo.
+- `[x]` Keep publishing, registry credentials, and image scanners out of this repository.
 
 ## Frozen
 
@@ -1045,7 +1046,7 @@ These replace the looser readings from the first draft of this checkpoint.
 
 ### 2026-10-12 - Queue, commit order, and robots fail-closed
 
-Drafted for the Milestone 4 checkpoint. The author has not approved the README sections yet.
+Approved: 2026-10-12. The README sections Design decisions and Known limitations are the checkpoint.
 
 - **Problem:** A reviewer will ask why concurrent fetches still produce one `pages` array, and why a failed `robots.txt` skips the rest of the origin.
 - **Chosen solution:** One crawl owns one FIFO queue and `concurrency` worker loops. `take()` numbers an item before the request. Finished items wait in a buffer, and links are reserved only for the next number. A skip or a failure commits an empty list. The same responses produce the same records for any `concurrency`.
@@ -1056,7 +1057,22 @@ Drafted for the Milestone 4 checkpoint. The author has not approved the README s
 - **How it was verified:** Read against Cemented Behavior for the frontier, commit order, robots, and the query step that maps `%FF` and `%FE` to `q=%EF%BF%BD`. Node's `URLSearchParams` produces that shared key. `npm run verify` is unchanged: lint is clean and the suite has 257 tests. No crawl behavior changed.
 - **Lesson learned:** Stable order has a cost. Sequence 2 can be finished and still unable to reserve links until sequence 1 commits. Fail-closed is the other side of the same idea: an unknown robots policy is not treated as permission.
 
+### 2026-10-12 - Optional image
+
+- **Problem:** The fixture demo ran only on the host. A reviewer had no image pinned to the same Node version, and a root process was the easy default.
+- **Chosen solution:** `Dockerfile` uses `node:24-bookworm-slim`, the major version in `backend/.nvmrc`. A deps stage runs `npm ci --omit=dev` and is discarded. The runtime stage copies production `node_modules`, `backend/src`, and the two fixture files the demo needs, then switches to `appuser` (uid 1001). The default command is `node backend/tests/fixtures/demo.js`, so `docker run --rm webcrawler` is the README demo. `.dockerignore` keeps `.npmrc`, `.env`, and `node_modules` out of the build context. There is no publish step, registry login, or image scanner.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 258 tests. `docker build -t webcrawler .` then `docker run --rm webcrawler` prints the summary and exits 0. `docker inspect` reports user `appuser`.
+- **Lesson learned:** The deps stage is the size cut. Jest and ESLint never enter the runtime image. The Node base is still most of the image, and a second stage does not remove it.
+
 ## Change Log
+
+### 2026-10-12 (Optional image)
+
+- A multi-stage image pinned to Node 24 runs the fixture demo as `appuser`. The README documents `docker build` and `docker run`. The image is not published.
+
+### 2026-10-12 (Milestone 4 checkpoint)
+
+- Design decisions and Known limitations were approved on 2026-10-12.
 
 ### 2026-10-12 (Milestone 4 draft)
 
