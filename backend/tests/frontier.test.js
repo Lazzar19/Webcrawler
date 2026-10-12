@@ -39,7 +39,7 @@ function clientFor(routes) {
   };
 }
 
-function crawlSite(routes, config) {
+function crawlSite(routes, config, dependencies = {}) {
   const http = clientFor(routes);
   const result = crawl(
     {
@@ -47,10 +47,40 @@ function crawlSite(routes, config) {
       minIntervalMs: 0,
       ...config,
     },
-    { httpClient: http }
+    { httpClient: http, ...dependencies }
   );
   return { http, result };
 }
+
+test("an ignored link is a debug line and not a page", async () => {
+  const lines = [];
+  const { result } = crawlSite(
+    {
+      "/": htmlResponse('<a href="mailto:x@example.com"></a><a href="/docs"></a>'),
+      "/docs": htmlResponse(""),
+    },
+    { maxDepth: 0 },
+    {
+      logger: {
+        debug(line) {
+          lines.push(line);
+        },
+        info() {},
+        warn() {},
+        error() {},
+      },
+    }
+  );
+
+  const pages = (await result).pages;
+  expect(pages.map((page) => page.canonicalUrl)).toEqual([
+    "https://example.com/",
+    "https://example.com/docs",
+  ]);
+  expect(lines).toEqual([
+    "ignored scheme mailto:x@example.com base https://example.com/",
+  ]);
+});
 
 test("a cycle creates one record per key", async () => {
   const { result } = crawlSite(

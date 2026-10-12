@@ -110,7 +110,7 @@ The fetched URL is the resolved URL with the fragment removed, not the key. On o
 - A resolved link with a non-empty username or password is ignored. It is not fetched, it is not rewritten by stripping the userinfo, and it does not enter `seen`. This is not the start-URL rule. A start URL with userinfo is a fatal configuration error and exit `2` before any fetch. One bad discovered link does not stop the crawl.
 - A redirect `Location` that resolves with a username or password is not requested. That record is `failed` / `bad-redirect`.
 - A redirect `Location` that resolves to a scheme other than `http` or `https` is not requested. A different scheme is a different origin, so that record is `skipped` / `redirect-off-origin`. `canonicalKey` is not called on it.
-- Ignored links produce no `PageResult`. They may produce a debug log line.
+- Ignored links produce no `PageResult`. An empty or whitespace-only `href` is silent. Every other ignored link writes one `logger.debug` line: `ignored {reason} {href} base {pageUrl}`. The reason is `unparsable` when `new URL` throws, `scheme` when the resolved scheme is not `http` or `https`, and `userinfo` when the resolved URL has a username or password. Carriage returns and line feeds in the href or the base are replaced with a space, so one link is one stderr line. The crawl passes the injected logger. A call with no logger writes nothing.
 
 ### Frontier and reservation
 
@@ -185,7 +185,7 @@ Fixed constants, not configuration: retry delay cap 5000 ms, crawl-delay cap 10 
 - Validation reads that result and calls `createCrawlConfig`. A numeric flag must be one or more digits. `0` becomes the number 0 and is passed in, so the default does not replace it. Any other spelling is a `ConfigError`. `createCrawlConfig` then applies the URL rule and the positive or non-negative rule. `--format` and `--output` stay beside the config and are not checked here.
 - The runner accepts `--format` `console` (the default when the flag is absent), `json`, or `csv`. Any other value is a `ConfigError` and exit `2`, before a crawl.
 
-An omitted field other than `startUrl` gets the default above. An unknown config key is a configuration error, so a typo cannot silently fall back to a default. Validation: `maxDepth` and `retryCount` and `minIntervalMs` and `retryBaseDelayMs` are non-negative integers. `maxPages`, `concurrency`, `perOriginLimit`, `timeoutMs`, and `maxResponseBytes` are positive integers. `respectRobots` is a boolean. `userAgent` is a non-empty string.
+An omitted field other than `startUrl` gets the default above. An unknown config key is a configuration error, so a typo cannot silently fall back to a default. Validation: `maxDepth` and `retryCount` and `minIntervalMs` and `retryBaseDelayMs` are non-negative integers. `maxPages`, `concurrency`, `perOriginLimit`, `timeoutMs`, and `maxResponseBytes` are positive integers. `respectRobots` is a boolean. `userAgent` is a non-empty string and must not contain a character in U+0000–U+001F or U+007F. Those bytes are illegal in an HTTP header value, so a `User-Agent` of `Bot\r\nX-Extra: 1` is a `ConfigError` before any fetch. The message is `userAgent must not contain control characters`.
 
 ### Workers and termination
 
@@ -266,7 +266,7 @@ The HTTP client does not follow redirects. The worker runs the redirect loop bec
 
 `queued`, `fetching`, `ok`, `skipped`, `failed`.
 
-`fetching` is transient and never appears in a finished result. `queued` appears in a result only after an interrupt.
+`fetching` is transient. A finished result does not contain it: in-flight work reaches `ok`, `skipped`, or `failed` before the result is returned. `queued` appears in a result only after an interrupt. If a `fetching` record is still present, the console reporter prints it and does not throw. A throw there would replace the partial crawl with a fatal report error.
 
 Skip reasons: `other-origin`, `redirect-off-origin`, `depth-limit`, `page-limit`, `duplicate`, `robots`, `robots-unavailable`, `non-html`.
 
@@ -286,6 +286,7 @@ One module owns `fetch`. It is created with injected dependencies: `createHttpCl
 - The body is decoded as UTF-8 with `TextDecoder`.
 - It returns `{ url, statusCode, contentType, location, body, byteLength, attempts, durationMs }`, or throws a `FetchError` with `kind` and `attempts`.
 - An HTTP status is never thrown. A 4xx or 5xx response is returned after retries are exhausted, and the crawler classifies it.
+- `get` does not return `undefined`. `retryCount` must be a non-negative integer. Any other value throws `Error` `retryCount must be a non-negative integer` before an attempt. If the attempt loop ends without a response or a `FetchError`, `get` throws `Error` `HTTP client ended without a response`. That error is not a page failure. The worker's existing catch treats it as fatal-stop.
 
 ### Retries
 
@@ -373,6 +374,7 @@ robots https://example.com allow-all 404
   - `skipped {canonicalUrl} depth {depth} {skipReason}`
   - `failed {statusCode} {canonicalUrl} depth {depth} {errorKind} {errorMessage}` when `statusCode` is not null. When it is null, omit it: `failed {canonicalUrl} depth {depth} {errorKind} {errorMessage}`
   - `queued {canonicalUrl} depth {depth}`
+  - `fetching {canonicalUrl} depth {depth}` when a record is still in that transient state. The counts line does not grow a seventh field.
 - When `finalUrl` is not null and is not `requestedUrl`, append `final {finalUrl}` to that page line. That is how a redirect stays visible. `discoveredFrom`, `waitedMs`, `contentType`, `byteLength`, and `attempts` stay in JSON and CSV. They are not on the console line.
 - Then one line per robots entry, in result order: `robots {origin} {outcome} {statusCode}`. Append `{errorKind}` only when it is not null. Omit `{statusCode}` when it is null.
 - stdout carries one artifact. With `--format console` (the default), the summary goes to stdout. With `--format json` or `csv` and no `--output`, that format goes to stdout and the summary goes to stderr. With `--output`, the chosen format is written to that path, and the summary goes to stdout.
@@ -472,7 +474,7 @@ Integration tests use a real server, not a `fetch` mock.
 **Known behavior of the code today:**
 
 - `[x]` A frontier crawl, config validation, a robots manager on `robots-parser`, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 258 tests.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 263 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
 - `[x]` `npm start` from `backend/` runs `src/main.js` through `runCli`. A bad URL or flag exits `2`. A finished crawl exits `0`, including when pages failed. A fatal error or a failed `--output` write exits `1`. The second SIGINT exits `130`. The default stdout artifact is the console summary. `--format json` or `csv` without `--output` puts that artifact on stdout and the summary on stderr. `--output` writes the chosen format and still prints the summary.
@@ -1064,7 +1066,18 @@ Approved: 2026-10-12. The README sections Design decisions and Known limitations
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 258 tests. `docker build -t webcrawler .` then `docker run --rm webcrawler` prints the summary and exits 0. `docker inspect` reports user `appuser`.
 - **Lesson learned:** The deps stage is the size cut. Jest and ESLint never enter the runtime image. The Node base is still most of the image, and a second stage does not remove it.
 
+### 2026-10-12 - Engine and CLI edges
+
+- **Problem:** `get` could finish the retry loop with `undefined` when `retryCount` was not a non-negative integer, and the worker would then fail the crawl without a named error. A `User-Agent` containing CR or LF was accepted and could split the header. `getURLs` was a second name for `extractLinks`. Ignored links were dropped with no debug line. A `fetching` record made `formatConsole` throw, which would discard a partial result.
+- **Chosen solution:** `get` throws `retryCount must be a non-negative integer` before an attempt, and throws `HTTP client ended without a response` if the loop ends with nothing. That second error is fatal-stop, not a page failure. `userAgent` rejects U+0000–U+001F and U+007F as a `ConfigError`, so the CLI exits `2` before a fetch. `getURLs` is gone; the old cases call `extractLinks`. An ignored link that is not blank writes `ignored {reason} {href} base {pageUrl}` through the injected logger. The console line for a leaked `fetching` record is `fetching {canonicalUrl} depth {depth}`, with the same `final` suffix as the other lines.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 263 tests.
+- **Lesson learned:** A reporter that throws is a second failure mode. The partial crawl has to survive a state the engine is not supposed to emit.
+
 ## Change Log
+
+### 2026-10-12 (Engine and CLI edges)
+
+- `get` no longer falls out of the retry loop with `undefined`. A `User-Agent` with a control character is a `ConfigError`. `getURLs` is gone. Ignored links write one debug line. A `fetching` record is printed instead of throwing away the report.
 
 ### 2026-10-12 (Optional image)
 

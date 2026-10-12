@@ -153,6 +153,9 @@ function createHttpClient({
 
   return {
     async get(url, { maxBytes, beforeAttempt, wantBody }) {
+      if (!Number.isInteger(retryCount) || retryCount < 0) {
+        throw new Error("retryCount must be a non-negative integer");
+      }
       const maxAttempts = retryCount + 1;
       let attempts = 0;
       let started = null;
@@ -258,6 +261,8 @@ function createHttpClient({
           pendingResult = null;
         }
       }
+
+      throw new Error("HTTP client ended without a response");
     },
   };
 }

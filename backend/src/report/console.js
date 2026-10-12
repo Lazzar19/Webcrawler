@@ -1,4 +1,4 @@
-const PAGE_STATES = new Set(["ok", "skipped", "failed", "queued"]);
+const PAGE_STATES = new Set(["ok", "skipped", "failed", "queued", "fetching"]);
 
 function pageLine(page) {
   if (!PAGE_STATES.has(page.state)) {

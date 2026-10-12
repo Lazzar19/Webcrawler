@@ -307,6 +307,25 @@ function statusResponse(status, headers = {}) {
   return responseFrom({ status, headers, body: null });
 }
 
+test("a negative retryCount throws before any attempt", async () => {
+  let called = false;
+  const http = createHttpClient({
+    fetchImpl() {
+      called = true;
+      return statusResponse(200);
+    },
+    clock,
+    userAgent: "WebcrawlerBot/1.0",
+    timeoutMs: 1000,
+    retryCount: -1,
+  });
+
+  await expect(http.get("https://example.com/", htmlOptions(100))).rejects.toThrow(
+    "retryCount must be a non-negative integer"
+  );
+  expect(called).toBe(false);
+});
+
 test("backoff runs before beforeAttempt, then the next attempt", async () => {
   const events = [];
   let calls = 0;

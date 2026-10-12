@@ -49,7 +49,18 @@ function documentBase(document, pageUrl) {
   }
 }
 
-function extractLinks(html, pageUrl) {
+function oneLine(value) {
+  return String(value).replace(/[\r\n]+/g, " ");
+}
+
+function logIgnored(logger, reason, raw, pageUrl) {
+  if (!logger) {
+    return;
+  }
+  logger.debug(`ignored ${reason} ${oneLine(raw)} base ${oneLine(pageUrl)}`);
+}
+
+function extractLinks(html, pageUrl, logger) {
   const document = new JSDOM(html).window.document;
   const base = documentBase(document, pageUrl);
   const links = [];
@@ -63,12 +74,15 @@ function extractLinks(html, pageUrl) {
     try {
       resolved = new URL(raw, base);
     } catch {
+      logIgnored(logger, "unparsable", raw, pageUrl);
       continue;
     }
     if (resolved.protocol !== "http:" && resolved.protocol !== "https:") {
+      logIgnored(logger, "scheme", raw, pageUrl);
       continue;
     }
     if (resolved.username !== "" || resolved.password !== "") {
+      logIgnored(logger, "userinfo", raw, pageUrl);
       continue;
     }
     resolved.hash = "";

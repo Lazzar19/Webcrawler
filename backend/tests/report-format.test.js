@@ -166,6 +166,30 @@ robots https://example.com unavailable timeout
 `);
 });
 
+test("a fetching record is printed and does not throw", () => {
+  const result = sampleResult();
+  result.pages = [
+    page({
+      canonicalUrl: "https://example.com/open",
+      requestedUrl: "https://example.com/open",
+      finalUrl: "https://example.com/landed",
+      state: "fetching",
+      statusCode: null,
+      contentType: null,
+      byteLength: null,
+      attempts: 0,
+    }),
+  ];
+  result.robots = [];
+  result.counts = { reserved: 1, fetched: 0, ok: 0, skipped: 0, failed: 0, queued: 0 };
+
+  expect(formatConsole(result)).toBe(`completed https://example.com/ 840ms
+reserved 1 fetched 0 ok 0 skipped 0 failed 0 queued 0
+
+fetching https://example.com/open depth 0 final https://example.com/landed
+`);
+});
+
 test("pages stay in result order", () => {
   const result = sampleResult();
   result.pages = [

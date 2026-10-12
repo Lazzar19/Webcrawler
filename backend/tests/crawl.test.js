@@ -1,5 +1,4 @@
-const { getURLs } = require("../src/crawler/crawl.js");
-const { canonicalKey } = require("../src/crawler/url-policy");
+const { canonicalKey, extractLinks } = require("../src/crawler/url-policy");
 const { test, expect } = require("@jest/globals");
 
 test("canonical key keeps the scheme", () => {
@@ -21,7 +20,7 @@ test("http and https stay different keys", () => {
   );
 });
 
-test("getURLsfromHTML absolute urls", () => {
+test("extractLinks absolute urls", () => {
   const inputBody = `
     <html>
         <body>
@@ -32,12 +31,12 @@ test("getURLsfromHTML absolute urls", () => {
     </html>
     `;
   const inputURL = "https://blog.boot.dev/path/";
-  const actual = getURLs(inputBody, inputURL);
+  const actual = extractLinks(inputBody, inputURL);
   const expected = ["https://blog.boot.dev/path/"];
   expect(actual).toEqual(expected);
 });
 
-test("getURLsfromHTML relative urls", () => {
+test("extractLinks relative urls", () => {
   const inputBody = `
     <html>
         <body>
@@ -48,12 +47,12 @@ test("getURLsfromHTML relative urls", () => {
     </html>
     `;
   const inputURL = "https://blog.boot.dev";
-  const actual = getURLs(inputBody, inputURL);
+  const actual = extractLinks(inputBody, inputURL);
   const expected = ["https://blog.boot.dev/path/"];
   expect(actual).toEqual(expected);
 });
 
-test("getURLsfromHTML both urls", () => {
+test("extractLinks both urls", () => {
   const inputBody = `
     <html>
         <body>
@@ -71,12 +70,12 @@ test("getURLsfromHTML both urls", () => {
     </html>
     `;
   const inputURL = "https://blog.boot.dev";
-  const actual = getURLs(inputBody, inputURL);
+  const actual = extractLinks(inputBody, inputURL);
   const expected = ["https://blog.boot.dev/path1/", "https://blog.boot.dev/path2/"];
   expect(actual).toEqual(expected);
 });
 
-test("getURLsfromHTML invalid urls", () => {
+test("extractLinks invalid urls", () => {
   const inputBody = `
     <html>
         <body>
@@ -87,12 +86,12 @@ test("getURLsfromHTML invalid urls", () => {
     </html>
     `;
   const inputURL = "https://blog.boot.dev";
-  const actual = getURLs(inputBody, inputURL);
+  const actual = extractLinks(inputBody, inputURL);
   const expected = ["https://blog.boot.dev/invalid"];
   expect(actual).toEqual(expected);
 });
 
-test("getURLsFromHTML handles html with 0 links", () => {
+test("extractLinks handles html with 0 links", () => {
   const inputBody = `
         <html>
             <body>  
@@ -101,20 +100,20 @@ test("getURLsFromHTML handles html with 0 links", () => {
         </html>
     `;
   const inputURL = "https://example.com";
-  const actual = getURLs(inputBody, inputURL);
+  const actual = extractLinks(inputBody, inputURL);
   const expected = [];
   expect(actual).toEqual(expected);
 });
 
-test("getURLsfromHTML handles empty HTML", () => {
+test("extractLinks handles empty HTML", () => {
   const inputBody = "";
   const inputURL = "https://example.com";
-  const actual = getURLs(inputBody, inputURL);
+  const actual = extractLinks(inputBody, inputURL);
   const expected = [];
   expect(actual).toEqual(expected);
 });
 
-test("getURLsfromHTML malformed HTML", () => {
+test("extractLinks malformed HTML", () => {
   const inputBody = `
         <html>
             <body>
@@ -128,7 +127,7 @@ test("getURLsfromHTML malformed HTML", () => {
     `;
 
   const inputURL = "https://example.com";
-  const actual = getURLs(inputBody, inputURL);
+  const actual = extractLinks(inputBody, inputURL);
   const expected = ["https://example.com/page1", "https://example.com/page2"];
   expect(actual).toEqual(expected);
 });

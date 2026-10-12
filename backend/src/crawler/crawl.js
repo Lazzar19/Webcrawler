@@ -29,7 +29,7 @@ function skipPage(page, skipReason) {
   page.skipReason = skipReason;
 }
 
-async function fetchRecord(item, lease, http, robots, frontier, clock, startOrigin, config) {
+async function fetchRecord(item, lease, http, robots, frontier, clock, startOrigin, config, logger) {
   const page = item.page;
   let currentUrl = page.requestedUrl;
   page.finalUrl = currentUrl;
@@ -155,7 +155,7 @@ async function fetchRecord(item, lease, http, robots, frontier, clock, startOrig
     }
 
     try {
-      item.links = extractLinks(response.body, page.finalUrl);
+      item.links = extractLinks(response.body, page.finalUrl, logger);
       page.state = "ok";
     } catch (error) {
       failPage(page, "parse", error.message);
@@ -182,7 +182,7 @@ async function runWorker(frontier, gate, robots, http, clock, logger, startOrigi
         item.page.skipReason = decision.reason;
         item.links = [];
       } else {
-        await fetchRecord(item, lease, http, robots, frontier, clock, startOrigin, config);
+        await fetchRecord(item, lease, http, robots, frontier, clock, startOrigin, config, logger);
       }
       frontier.commit(item);
     } catch (error) {
@@ -288,11 +288,6 @@ async function crawl(configInput, dependencies = {}) {
   };
 }
 
-function getURLs(htmlBody, baseURL) {
-  return extractLinks(htmlBody, baseURL);
-}
-
 module.exports = {
   crawl,
-  getURLs,
 };

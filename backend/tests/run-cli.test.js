@@ -27,6 +27,23 @@ function resultFor(startUrl) {
   };
 }
 
+test("a user agent with a newline exits 2 and does not crawl", async () => {
+  const io = streams();
+  let called = false;
+  const code = await runCli(["https://example.com/", "--user-agent", "Bot\r\nX-Extra: 1"], {
+    ...io,
+    signals: new EventEmitter(),
+    crawl() {
+      called = true;
+    },
+  });
+
+  expect(code).toBe(2);
+  expect(called).toBe(false);
+  expect(io.err()).toMatch(/control characters/);
+  expect(io.out()).toBe("");
+});
+
 test("a bad URL exits 2 and does not crawl", async () => {
   const io = streams();
   let called = false;

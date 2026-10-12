@@ -62,6 +62,17 @@ describe("startUrl", () => {
 });
 
 describe("configuration validation", () => {
+  test("rejects a user agent that would split a header", () => {
+    expect(() => createCrawlConfig({
+      startUrl,
+      userAgent: "Bot\r\nX-Extra: 1",
+    })).toThrow("userAgent must not contain control characters");
+    expect(() => createCrawlConfig({
+      startUrl,
+      userAgent: "Bot\u0000",
+    })).toThrow(ConfigError);
+  });
+
   describe("maxDepth", () => {
     test("accepts zero", () => {
       expect(() => {

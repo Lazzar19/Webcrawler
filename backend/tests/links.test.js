@@ -49,15 +49,29 @@ test("keeps the page URL when the first base href does not parse", () => {
 });
 
 test("ignores non-http schemes, userinfo, and blank hrefs", () => {
+  const lines = [];
   const html = page(`
     <a href="mailto:x@example.com"></a>
     <a href="javascript:alert(1)"></a>
     <a href="https://user:pw@example.com/secret"></a>
+    <a href="http://["></a>
+    <a href="mailto:a@b.example\r\nX-Injected: 1"></a>
     <a href=""></a>
     <a href="   "></a>
     <a href="/kept"></a>
   `);
-  expect(extractLinks(html, pageUrl)).toEqual(["https://example.com/kept"]);
+  expect(extractLinks(html, pageUrl, {
+    debug(line) {
+      lines.push(line);
+    },
+  })).toEqual(["https://example.com/kept"]);
+  expect(lines).toEqual([
+    `ignored scheme mailto:x@example.com base ${pageUrl}`,
+    "ignored scheme javascript:alert(1) base https://example.com/dir/page",
+    `ignored userinfo https://user:pw@example.com/secret base ${pageUrl}`,
+    `ignored unparsable http://[ base ${pageUrl}`,
+    `ignored scheme mailto:a@b.example X-Injected: 1 base ${pageUrl}`,
+  ]);
 });
 
 test("resolved spellings keep a trailing slash and drop the fragment", () => {

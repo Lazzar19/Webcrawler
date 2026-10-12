@@ -21,6 +21,16 @@ class ConfigError extends Error {
   }
 }
 
+function hasControlCharacter(value) {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function isNonNegativeInteger(value) {
   return Number.isInteger(value) && value >= 0;
 }
@@ -89,6 +99,9 @@ function createCrawlConfig(options = {}) {
   }
   if (typeof config.userAgent !== "string" || config.userAgent === "") {
     throw new ConfigError("userAgent must be a non-empty string");
+  }
+  if (hasControlCharacter(config.userAgent)) {
+    throw new ConfigError("userAgent must not contain control characters");
   }
 
   return Object.freeze(config);
