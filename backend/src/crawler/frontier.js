@@ -279,4 +279,5 @@ function createFrontier({ config, clock, onFatal, trace }) {
 
 module.exports = {
   createFrontier,
+  trapReason,
 };

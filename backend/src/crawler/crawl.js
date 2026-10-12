@@ -4,7 +4,7 @@ const { createCrawlConfig } = require("./crawl-config");
 const { createHttpClient, BudgetStop, FetchError } = require("./http-client");
 const { createPolitenessGate } = require("./politeness");
 const { createRobotsManager } = require("./robots-manager");
-const { createFrontier } = require("./frontier");
+const { createFrontier, trapReason } = require("./frontier");
 const { canonicalKey, extractLinks } = require("./url-policy");
 const { emitTrace, guardTrace } = require("./trace");
 
@@ -142,6 +142,12 @@ async function fetchRecord(item, lease, http, robots, frontier, clock, startOrig
       }
       frontier.alias(hopKey, item);
       chain.push(hopKey);
+      const guard = trapReason(hopKey, config);
+      if (guard !== null) {
+        skipPage(page, guard);
+        item.links = [];
+        return;
+      }
 
       const decision = await robots.check(resolved.href, { beforeAttempt: lease.beforeAttempt });
       emitTrace(trace, "robots-check", {

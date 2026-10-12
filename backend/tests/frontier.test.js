@@ -579,3 +579,105 @@ test("the earlier trap guard wins when one key trips two", async () => {
     [key, "url-length"],
   ]);
 });
+
+test("the start URL is fetched even when its key trips a guard", async () => {
+  const { http, result } = crawlSite(
+    {
+      "/a/b": htmlResponse('<a href="/c/d"></a><a href="/e"></a>'),
+      "/e": htmlResponse(""),
+    },
+    {
+      startUrl: "https://example.com/a/b",
+      respectRobots: false,
+      maxDepth: 1,
+      maxPathDepth: 1,
+    }
+  );
+  const crawlResult = await result;
+
+  expect(crawlResult.pages.map((page) => [page.canonicalUrl, page.state, page.skipReason])).toEqual([
+    ["https://example.com/a/b", "ok", null],
+    ["https://example.com/c/d", "skipped", "path-depth"],
+    ["https://example.com/e", "ok", null],
+  ]);
+  expect(http.requested).toEqual(["https://example.com/a/b", "https://example.com/e"]);
+});
+
+test("a redirect hop that trips a guard is not requested and keeps the last response", async () => {
+  const { http, result } = crawlSite(
+    {
+      "/robots.txt": {
+        statusCode: 200,
+        contentType: "text/plain",
+        body: "User-agent: *\nDisallow: /a/a/a\n",
+      },
+      "/": {
+        statusCode: 302,
+        location: "/a/a/a",
+        contentType: "text/html",
+        body: "",
+      },
+      "/a/a/a": htmlResponse("should not be fetched"),
+    },
+    { maxDepth: 1, maxPages: 1, maxSegmentRepeats: 2 }
+  );
+  const crawlResult = await result;
+
+  expect(http.requested).toEqual(["https://example.com/robots.txt", "https://example.com/"]);
+  expect(crawlResult.counts.reserved).toBe(1);
+  expect(crawlResult.pages).toEqual([
+    expect.objectContaining({
+      canonicalUrl: "https://example.com/",
+      state: "skipped",
+      skipReason: "repeated-segment",
+      statusCode: 302,
+      attempts: 1,
+      finalUrl: "https://example.com/",
+    }),
+  ]);
+});
+
+test("a hop onto an existing key is duplicate before the trap guard", async () => {
+  const { http, result } = crawlSite(
+    {
+      "/": htmlResponse('<a href="/a/a"></a><a href="/go"></a>'),
+      "/go": {
+        statusCode: 302,
+        location: "/a/a",
+        contentType: "text/html",
+        body: "",
+      },
+    },
+    { respectRobots: false, maxDepth: 1, concurrency: 1, maxSegmentRepeats: 1 }
+  );
+  const crawlResult = await result;
+
+  expect(crawlResult.pages.map((page) => [page.canonicalUrl, page.skipReason, page.statusCode])).toEqual([
+    ["https://example.com/", null, 200],
+    ["https://example.com/a/a", "repeated-segment", null],
+    ["https://example.com/go", "duplicate", 302],
+  ]);
+  expect(http.requested).toEqual(["https://example.com/", "https://example.com/go"]);
+  expect(crawlResult.counts.reserved).toBe(2);
+});
+
+test("a URL inside the default trap limits is reserved", async () => {
+  const { http, result } = crawlSite(
+    {
+      "/": htmlResponse('<a href="/docs"></a>'),
+      "/docs": htmlResponse(""),
+    },
+    { respectRobots: false, maxDepth: 1 }
+  );
+  const crawlResult = await result;
+
+  expect(crawlResult.config.maxUrlLength).toBe(2048);
+  expect(crawlResult.config.maxPathDepth).toBe(16);
+  expect(crawlResult.config.maxSegmentRepeats).toBe(2);
+  expect(crawlResult.pages.map((page) => [page.canonicalUrl, page.state, page.skipReason])).toEqual([
+    ["https://example.com/", "ok", null],
+    ["https://example.com/docs", "ok", null],
+  ]);
+  expect(http.requested).toEqual(["https://example.com/", "https://example.com/docs"]);
+  expect(crawlResult.counts.reserved).toBe(2);
+});

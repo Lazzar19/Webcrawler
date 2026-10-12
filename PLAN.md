@@ -685,12 +685,12 @@ Integration tests use a real server, not a `fetch` mock.
 
 ## Current Status
 
-**Active milestone:** Milestone 8 - Crawler-trap guards. Config and the discovered-key checks are in place. The start URL exception and redirect hops have not started. Milestone 7's checklist is complete and has not been approved.
+**Active milestone:** Milestone 8 - Crawler-trap guards. The checklist is complete and has not been approved. Milestone 9 has not started.
 
 **Known behavior of the code today:**
 
 - `[x]` A frontier crawl, config validation, a robots manager on `robots-parser`, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 335 tests.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 339 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
 - `[x]` `npm start` from `backend/` runs `src/main.js` through `runCli`. A bad URL or flag exits `2`. A finished crawl exits `0`, including when pages failed. A fatal error or a failed `--output` write exits `1`. The second SIGINT exits `130`. The default stdout artifact is the console summary. `--format json` or `csv` without `--output` puts that artifact on stdout and the summary on stderr. `--output` writes the chosen format and still prints the summary.
@@ -710,7 +710,7 @@ Integration tests use a real server, not a `fetch` mock.
 - `[x]` `docker build -t webcrawler .` then `docker run --rm webcrawler` runs the fixture demo. The image uses Node 24, a non-root user, and a deps stage that is not the runtime. The repository does not publish the image.
 - `[x]` The default console is the count summary. `--details` prints that summary, then the page table. `--format json --details` and `--format csv --details` exit `2` before a crawl. `--details=true` and `--trace=1` exit `2`. `--trace` emits the event table to stderr and never to stdout. Values outside the character rule are quoted. A URL with userinfo is rewritten to that origin with username `***`. A throwing sink is logged once and does not change the result or the rejection. `--format json --trace` leaves parseable JSON on stdout. JSON and CSV stay as they are.
 - `[x]` `maxDurationMs` and `maxTotalAttempts` default to `null`. `0` is a `ConfigError`. `--max-duration` and `--max-attempts` set them, and `--max-bytes` is rejected. `claimAttempt()` runs before a retry sleep and before `beforeAttempt`. A refused claim does not fetch. `BudgetStop` does not become fatal-stop. The first stop reason stays: a budget stop exits `0`, and a later SIGINT does not replace it. A page that never starts a request is `skipped` / `budget`. A refused retry or hop keeps what it already earned. After the stop, queued records stay queued and a later commit reserves nothing.
-- `[ ]` `maxUrlLength`, `maxPathDepth`, and `maxSegmentRepeats` default to `2048`, `16`, and `2`. `0` is a `ConfigError`. A discovered key is checked after crawl depth and before `maxPages`, in that order. A hit is skipped, enters `seen`, is not fetched, and does not count as a reservation. The start URL and a redirect hop are not checked yet.
+- `[x]` `maxUrlLength`, `maxPathDepth`, and `maxSegmentRepeats` default to `2048`, `16`, and `2`. `0` is a `ConfigError`. A discovered key is checked after crawl depth and before `maxPages`, in that order. A hit is skipped, enters `seen`, is not fetched, and does not count as a reservation. The start URL is fetched even when its key would trip a guard. A redirect hop is checked after the duplicate check and before robots. A refused hop keeps the attempts and the last status, and its key does not take a reservation.
 - `[ ]` A repeated HTML body is fetched and its links are reserved. A `rel=canonical` href is not read. Milestone 9 adds both.
 
 ## Milestones
@@ -895,8 +895,8 @@ The contract is Crawler-trap guards. Do this after Milestone 7.
 
 - `[x]` Add `maxUrlLength`, `maxPathDepth`, and `maxSegmentRepeats` to config, with the defaults in Defaults. `0` is a `ConfigError`. Wire `--max-url-length`, `--max-path-depth`, and `--max-segment-repeats`.
 - `[x]` Apply the three checks in that order to a discovered key, after crawl depth and before `maxPages`. A hit is `skipped` with `url-length`, `path-depth`, or `repeated-segment`. It enters `seen`, is not fetched, and does not count as a reservation.
-- `[ ]` Fetch the start URL even when its key would trip a guard. Apply the same guards to a redirect hop after the duplicate check and before robots. A refused hop keeps the attempts and the last status.
-- `[ ]` Tests: a key of length `maxUrlLength + 1` is `url-length`; `/a//b` counts the empty segment; the third copy of a segment is `repeated-segment`; a URL inside the defaults is reserved as today; two guards on one key report the earlier reason.
+- `[x]` Fetch the start URL even when its key would trip a guard. Apply the same guards to a redirect hop after the duplicate check and before robots. A refused hop keeps the attempts and the last status.
+- `[x]` Tests: a key of length `maxUrlLength + 1` is `url-length`; `/a//b` counts the empty segment; the third copy of a segment is `repeated-segment`; a URL inside the defaults is reserved as today; two guards on one key report the earlier reason.
 
 **Done when:** the fixture demo page set is unchanged under the defaults. A tight cap skips the trap URL and still fetches a later URL that fits in `maxPages`. `npm run verify` is green.
 
@@ -1436,7 +1436,18 @@ Approved: 2026-10-12. The README sections Design decisions and Known limitations
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 335 tests. A key one character past the cap is `url-length` and the next short URL is still reserved. A link past `maxDepth` stays `depth-limit`. `/a//b` is `path-depth`. `/a/a/a` is `repeated-segment` and `/A/a/A` is not. A key that trips all three reports `url-length`.
 - **Lesson learned:** The guard looks at the canonical key. A query full of slashes does not deepen the path, and an empty segment between slashes does.
 
+### 2026-10-12 - Trap guards on the start URL and a redirect hop
+
+- **Problem:** A discovered key could be trap-skipped, but a redirect could still request a hop that tripped the same guard. The start URL had no test that it is fetched when its own key would trip one.
+- **Chosen solution:** `reserveStart` does not apply the guards, so the start URL is fetched even when its key is too long, too deep, or repeats a segment. A redirect hop uses `trapReason` after the off-origin, loop, and duplicate checks, and before robots. A hit is not requested. The record is skipped with that reason, keeps the attempts and the last status, and keeps `finalUrl` as the last requested URL. The hop key is an alias in `seen` and does not take a `maxPages` slot. A hop whose key is already owned by another record stays `duplicate`.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 339 tests. A start path `/a/b` is fetched when `maxPathDepth` is 1, and `/c/d` is `path-depth`. A `302` to `/a/a/a` is `repeated-segment` with status `302`, and that hop is not requested even though robots would disallow it. `/docs` under the defaults is reserved and fetched. The fixture demo is unchanged.
+- **Lesson learned:** The guard on a hop has to run before robots. Otherwise a disallow hides which limit actually fired.
+
 ## Change Log
+
+### 2026-10-12 (Trap guards on the start URL and a redirect hop)
+
+- The start URL is fetched even when its key would trip a guard. A redirect hop is checked after the duplicate check and before robots. A refused hop keeps the last response and does not take a page slot. Milestone 8's checklist is complete.
 
 ### 2026-10-12 (Trap guards on a discovered key)
 
