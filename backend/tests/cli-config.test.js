@@ -98,6 +98,10 @@ test.each([
   ["--max-attempts", "0", /maxTotalAttempts/],
   ["--max-duration", "1.5", /maxDurationMs/],
   ["--max-attempts", "nope", /maxTotalAttempts/],
+  ["--max-url-length", "0", /maxUrlLength/],
+  ["--max-path-depth", "0", /maxPathDepth/],
+  ["--max-segment-repeats", "0", /maxSegmentRepeats/],
+  ["--max-url-length", "1.5", /maxUrlLength/],
 ])("%s %s is rejected", (flag, value, pattern) => {
   expect(() => createCliConfig([startUrl, flag, value])).toThrow(ConfigError);
   expect(() => createCliConfig([startUrl, flag, value])).toThrow(pattern);
@@ -125,4 +129,23 @@ test("--max-duration and --max-attempts become positive integers", () => {
 
   expect(config.maxDurationMs).toBe(1500);
   expect(config.maxTotalAttempts).toBe(4);
+  expect(config.maxUrlLength).toBe(DEFAULTS.maxUrlLength);
+  expect(config.maxPathDepth).toBe(DEFAULTS.maxPathDepth);
+  expect(config.maxSegmentRepeats).toBe(DEFAULTS.maxSegmentRepeats);
+});
+
+test("the trap flags become positive integers", () => {
+  const { config } = createCliConfig([
+    startUrl,
+    "--max-url-length",
+    "100",
+    "--max-path-depth",
+    "4",
+    "--max-segment-repeats",
+    "3",
+  ]);
+
+  expect(config.maxUrlLength).toBe(100);
+  expect(config.maxPathDepth).toBe(4);
+  expect(config.maxSegmentRepeats).toBe(3);
 });

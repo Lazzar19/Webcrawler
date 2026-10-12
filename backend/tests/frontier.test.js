@@ -472,3 +472,110 @@ test("an interrupt does not cut a retry sleep short", async () => {
   expect(result.pages[0].state).toBe("ok");
   expect(result.pages[0].attempts).toBe(2);
 });
+
+test("a discovered key past maxUrlLength is skipped and does not take a reservation", async () => {
+  const longPath = `/${"a".repeat(30)}`;
+  const longKey = `https://example.com${longPath}`;
+  const { http, result } = crawlSite(
+    {
+      "/": htmlResponse(`<a href="${longPath}"></a><a href="/ok"></a>`),
+      "/ok": htmlResponse(""),
+    },
+    {
+      respectRobots: false,
+      maxDepth: 1,
+      maxPages: 2,
+      maxUrlLength: longKey.length - 1,
+    }
+  );
+  const crawlResult = await result;
+
+  expect(crawlResult.pages.map((page) => [page.canonicalUrl, page.state, page.skipReason])).toEqual([
+    ["https://example.com/", "ok", null],
+    [longKey, "skipped", "url-length"],
+    ["https://example.com/ok", "ok", null],
+  ]);
+  expect(http.requested).toEqual(["https://example.com/", "https://example.com/ok"]);
+  expect(crawlResult.counts.reserved).toBe(2);
+});
+
+test("crawl depth is decided before a trap guard", async () => {
+  const longPath = `/${"a".repeat(30)}`;
+  const { result } = crawlSite(
+    {
+      "/": htmlResponse(`<a href="${longPath}"></a>`),
+    },
+    {
+      respectRobots: false,
+      maxDepth: 0,
+      maxUrlLength: `https://example.com${longPath}`.length - 1,
+    }
+  );
+
+  expect((await result).pages.map((page) => page.skipReason)).toEqual([null, "depth-limit"]);
+});
+
+test("path depth counts an empty segment and ignores the query", async () => {
+  const { http, result } = crawlSite(
+    {
+      "/": htmlResponse('<a href="/a/b"></a><a href="/a//b"></a><a href="/z?q=a/a/a/a"></a>'),
+      "/a/b": htmlResponse(""),
+      "/z": htmlResponse(""),
+    },
+    { respectRobots: false, maxDepth: 1, maxPathDepth: 2 }
+  );
+  const crawlResult = await result;
+
+  expect(crawlResult.pages.map((page) => [page.canonicalUrl, page.state, page.skipReason])).toEqual([
+    ["https://example.com/", "ok", null],
+    ["https://example.com/a//b", "skipped", "path-depth"],
+    ["https://example.com/a/b", "ok", null],
+    ["https://example.com/z?q=a%2Fa%2Fa%2Fa", "ok", null],
+  ]);
+  expect(http.requested).toEqual([
+    "https://example.com/",
+    "https://example.com/a/b",
+    "https://example.com/z?q=a/a/a/a",
+  ]);
+});
+
+test("the third copy of a segment is repeated-segment, and comparison is case-sensitive", async () => {
+  const { http, result } = crawlSite(
+    {
+      "/": htmlResponse('<a href="/a/b/a"></a><a href="/a/a/a"></a><a href="/A/a/A"></a>'),
+      "/a/b/a": htmlResponse(""),
+      "/A/a/A": htmlResponse(""),
+    },
+    { respectRobots: false, maxDepth: 1, maxSegmentRepeats: 2 }
+  );
+
+  expect((await result).pages.map((page) => [page.canonicalUrl, page.skipReason])).toEqual([
+    ["https://example.com/", null],
+    ["https://example.com/A/a/A", null],
+    ["https://example.com/a/a/a", "repeated-segment"],
+    ["https://example.com/a/b/a", null],
+  ]);
+  expect(http.requested).not.toContain("https://example.com/a/a/a");
+});
+
+test("the earlier trap guard wins when one key trips two", async () => {
+  const path = `/${"seg/".repeat(5)}${"x".repeat(80)}`;
+  const key = `https://example.com${path.replace(/\/$/, "")}`;
+  const { result } = crawlSite(
+    {
+      "/": htmlResponse(`<a href="${path}"></a>`),
+    },
+    {
+      respectRobots: false,
+      maxDepth: 1,
+      maxUrlLength: 40,
+      maxPathDepth: 2,
+      maxSegmentRepeats: 1,
+    }
+  );
+
+  expect((await result).pages.map((page) => [page.canonicalUrl, page.skipReason])).toEqual([
+    ["https://example.com/", null],
+    [key, "url-length"],
+  ]);
+});

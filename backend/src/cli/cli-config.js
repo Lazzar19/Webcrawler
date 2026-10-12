@@ -10,6 +10,9 @@ const INTEGER_RULE = {
   timeoutMs: "positive integer",
   maxDurationMs: "positive integer",
   maxTotalAttempts: "positive integer",
+  maxUrlLength: "positive integer",
+  maxPathDepth: "positive integer",
+  maxSegmentRepeats: "positive integer",
 };
 
 function integerFlag(field, raw) {

@@ -10,6 +10,9 @@ const OPTIONS = {
   timeout: { type: "string" },
   "max-duration": { type: "string" },
   "max-attempts": { type: "string" },
+  "max-url-length": { type: "string" },
+  "max-path-depth": { type: "string" },
+  "max-segment-repeats": { type: "string" },
   "user-agent": { type: "string" },
   "no-respect-robots": { type: "boolean" },
   format: { type: "string" },
@@ -60,6 +63,15 @@ function parseCliArgs(argv) {
   }
   if (values["max-attempts"] !== undefined) {
     options.maxTotalAttempts = values["max-attempts"];
+  }
+  if (values["max-url-length"] !== undefined) {
+    options.maxUrlLength = values["max-url-length"];
+  }
+  if (values["max-path-depth"] !== undefined) {
+    options.maxPathDepth = values["max-path-depth"];
+  }
+  if (values["max-segment-repeats"] !== undefined) {
+    options.maxSegmentRepeats = values["max-segment-repeats"];
   }
   if (values["user-agent"] !== undefined) {
     options.userAgent = values["user-agent"];

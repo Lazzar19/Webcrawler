@@ -77,6 +77,31 @@ describe("crawl budget config", () => {
   });
 });
 
+describe("crawler-trap config", () => {
+  test("uses the cemented defaults and accepts a positive integer", () => {
+    const config = createCrawlConfig({
+      startUrl,
+      maxUrlLength: 100,
+      maxPathDepth: 4,
+      maxSegmentRepeats: 3,
+    });
+
+    expect(DEFAULTS.maxUrlLength).toBe(2048);
+    expect(DEFAULTS.maxPathDepth).toBe(16);
+    expect(DEFAULTS.maxSegmentRepeats).toBe(2);
+    expect(config.maxUrlLength).toBe(100);
+    expect(config.maxPathDepth).toBe(4);
+    expect(config.maxSegmentRepeats).toBe(3);
+  });
+
+  test.each(["maxUrlLength", "maxPathDepth", "maxSegmentRepeats"])("rejects 0 for %s", (field) => {
+    expect(() => createCrawlConfig({ startUrl, [field]: 0 })).toThrow(ConfigError);
+    expect(() => createCrawlConfig({ startUrl, [field]: 0 })).toThrow(new RegExp(field));
+    expect(() => createCrawlConfig({ startUrl, [field]: -1 })).toThrow(ConfigError);
+    expect(() => createCrawlConfig({ startUrl, [field]: 1.5 })).toThrow(ConfigError);
+  });
+});
+
 describe("startUrl", () => {
   test("is required", () => {
     expect(() => createCrawlConfig()).toThrow(/startUrl/);

@@ -7,6 +7,36 @@ function requestedSpelling(input) {
   return url.href;
 }
 
+function pathSegments(pathname) {
+  const segments = pathname.split("/").slice(1);
+  if (segments.length === 1 && segments[0] === "") {
+    return [];
+  }
+  return segments;
+}
+
+function trapReason(key, config) {
+  if (key.length > config.maxUrlLength) {
+    return "url-length";
+  }
+  const segments = pathSegments(new URL(key).pathname);
+  if (segments.length > config.maxPathDepth) {
+    return "path-depth";
+  }
+  const seen = new Map();
+  for (const segment of segments) {
+    if (segment === "") {
+      continue;
+    }
+    const count = (seen.get(segment) ?? 0) + 1;
+    seen.set(segment, count);
+    if (count > config.maxSegmentRepeats) {
+      return "repeated-segment";
+    }
+  }
+  return null;
+}
+
 function compareKey(left, right) {
   if (left < right) return -1;
   if (left > right) return 1;
@@ -117,6 +147,11 @@ function createFrontier({ config, clock, onFatal, trace }) {
       }
       if (depth > config.maxDepth) {
         makeSkipped(fields, "depth-limit");
+        continue;
+      }
+      const guard = trapReason(link.key, config);
+      if (guard !== null) {
+        makeSkipped(fields, guard);
         continue;
       }
       if (fetchReservations >= config.maxPages) {

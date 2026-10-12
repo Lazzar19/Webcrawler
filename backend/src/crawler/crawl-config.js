@@ -12,6 +12,9 @@ const DEFAULTS = {
   userAgent: "WebcrawlerBot/1.0 (+https://github.com/Lazzar19/webcrawler)",
   maxDurationMs: null,
   maxTotalAttempts: null,
+  maxUrlLength: 2048,
+  maxPathDepth: 16,
+  maxSegmentRepeats: 2,
 };
 
 const ALLOWED_KEYS = new Set(["startUrl", ...Object.keys(DEFAULTS)]);
@@ -114,6 +117,15 @@ function createCrawlConfig(options = {}) {
   }
   if (!isNullOrPositiveInteger(config.maxTotalAttempts)) {
     throw new ConfigError("maxTotalAttempts must be null or a positive integer");
+  }
+  if (!isPositiveInteger(config.maxUrlLength)) {
+    throw new ConfigError("maxUrlLength must be a positive integer");
+  }
+  if (!isPositiveInteger(config.maxPathDepth)) {
+    throw new ConfigError("maxPathDepth must be a positive integer");
+  }
+  if (!isPositiveInteger(config.maxSegmentRepeats)) {
+    throw new ConfigError("maxSegmentRepeats must be a positive integer");
   }
 
   return Object.freeze(config);

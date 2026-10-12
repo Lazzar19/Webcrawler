@@ -116,6 +116,24 @@ test("--max-duration and --max-attempts stay the typed characters", () => {
   expect(parsed.options.maxDurationMs).not.toBe(0);
 });
 
+test("--max-url-length, --max-path-depth, and --max-segment-repeats stay the typed characters", () => {
+  const parsed = parseCliArgs([
+    "https://example.com/",
+    "--max-url-length",
+    "0",
+    "--max-path-depth=8",
+    "--max-segment-repeats",
+    "3",
+  ]);
+
+  expect(parsed.options).toEqual({
+    maxUrlLength: "0",
+    maxPathDepth: "8",
+    maxSegmentRepeats: "3",
+  });
+  expect(parsed.options.maxUrlLength).not.toBe(0);
+});
+
 test("an unknown flag is a ConfigError", () => {
   expect(() => {
     parseCliArgs(["https://example.com/", "--bogus"]);

@@ -344,7 +344,7 @@ On commit, the first matching rule decides:
 
 `fetching` is transient. A finished result does not contain it: in-flight work reaches `ok`, `skipped`, or `failed` before the result is returned. `queued` appears in a result only after an interrupt or a budget stop. If a `fetching` record is still present, `--details` prints a row for it and the summary does not throw. A throw there would replace the partial crawl with a fatal report error. The summary does not add a seventh count for it.
 
-Skip reasons: `other-origin`, `redirect-off-origin`, `depth-limit`, `page-limit`, `duplicate`, `robots`, `robots-unavailable`, `non-html`, `budget`.
+Skip reasons: `other-origin`, `redirect-off-origin`, `depth-limit`, `page-limit`, `duplicate`, `robots`, `robots-unavailable`, `non-html`, `budget`, `url-length`, `path-depth`, `repeated-segment`.
 
 A skipped or failed URL is a record in the result. It is not a successful page. The old `pages` map that stored a hit count is retired. Inbound link counts are out of scope.
 
@@ -685,12 +685,12 @@ Integration tests use a real server, not a `fetch` mock.
 
 ## Current Status
 
-**Active milestone:** Milestone 7 - Crawl budget. The checklist is complete and has not been approved. Milestone 8 has not started.
+**Active milestone:** Milestone 8 - Crawler-trap guards. Config and the discovered-key checks are in place. The start URL exception and redirect hops have not started. Milestone 7's checklist is complete and has not been approved.
 
 **Known behavior of the code today:**
 
 - `[x]` A frontier crawl, config validation, a robots manager on `robots-parser`, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 320 tests.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 335 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
 - `[x]` `npm start` from `backend/` runs `src/main.js` through `runCli`. A bad URL or flag exits `2`. A finished crawl exits `0`, including when pages failed. A fatal error or a failed `--output` write exits `1`. The second SIGINT exits `130`. The default stdout artifact is the console summary. `--format json` or `csv` without `--output` puts that artifact on stdout and the summary on stderr. `--output` writes the chosen format and still prints the summary.
@@ -710,7 +710,7 @@ Integration tests use a real server, not a `fetch` mock.
 - `[x]` `docker build -t webcrawler .` then `docker run --rm webcrawler` runs the fixture demo. The image uses Node 24, a non-root user, and a deps stage that is not the runtime. The repository does not publish the image.
 - `[x]` The default console is the count summary. `--details` prints that summary, then the page table. `--format json --details` and `--format csv --details` exit `2` before a crawl. `--details=true` and `--trace=1` exit `2`. `--trace` emits the event table to stderr and never to stdout. Values outside the character rule are quoted. A URL with userinfo is rewritten to that origin with username `***`. A throwing sink is logged once and does not change the result or the rejection. `--format json --trace` leaves parseable JSON on stdout. JSON and CSV stay as they are.
 - `[x]` `maxDurationMs` and `maxTotalAttempts` default to `null`. `0` is a `ConfigError`. `--max-duration` and `--max-attempts` set them, and `--max-bytes` is rejected. `claimAttempt()` runs before a retry sleep and before `beforeAttempt`. A refused claim does not fetch. `BudgetStop` does not become fatal-stop. The first stop reason stays: a budget stop exits `0`, and a later SIGINT does not replace it. A page that never starts a request is `skipped` / `budget`. A refused retry or hop keeps what it already earned. After the stop, queued records stay queued and a later commit reserves nothing.
-- `[ ]` There are no crawler-trap guards. Milestone 8 adds URL length, path depth, and repeated segments.
+- `[ ]` `maxUrlLength`, `maxPathDepth`, and `maxSegmentRepeats` default to `2048`, `16`, and `2`. `0` is a `ConfigError`. A discovered key is checked after crawl depth and before `maxPages`, in that order. A hit is skipped, enters `seen`, is not fetched, and does not count as a reservation. The start URL and a redirect hop are not checked yet.
 - `[ ]` A repeated HTML body is fetched and its links are reserved. A `rel=canonical` href is not read. Milestone 9 adds both.
 
 ## Milestones
@@ -893,8 +893,8 @@ The contract is Crawl budget. Do this after Milestone 6. Do not add `maxTotalByt
 
 The contract is Crawler-trap guards. Do this after Milestone 7.
 
-- `[ ]` Add `maxUrlLength`, `maxPathDepth`, and `maxSegmentRepeats` to config, with the defaults in Defaults. `0` is a `ConfigError`. Wire `--max-url-length`, `--max-path-depth`, and `--max-segment-repeats`.
-- `[ ]` Apply the three checks in that order to a discovered key, after crawl depth and before `maxPages`. A hit is `skipped` with `url-length`, `path-depth`, or `repeated-segment`. It enters `seen`, is not fetched, and does not count as a reservation.
+- `[x]` Add `maxUrlLength`, `maxPathDepth`, and `maxSegmentRepeats` to config, with the defaults in Defaults. `0` is a `ConfigError`. Wire `--max-url-length`, `--max-path-depth`, and `--max-segment-repeats`.
+- `[x]` Apply the three checks in that order to a discovered key, after crawl depth and before `maxPages`. A hit is `skipped` with `url-length`, `path-depth`, or `repeated-segment`. It enters `seen`, is not fetched, and does not count as a reservation.
 - `[ ]` Fetch the start URL even when its key would trip a guard. Apply the same guards to a redirect hop after the duplicate check and before robots. A refused hop keeps the attempts and the last status.
 - `[ ]` Tests: a key of length `maxUrlLength + 1` is `url-length`; `/a//b` counts the empty segment; the third copy of a segment is `repeated-segment`; a URL inside the defaults is reserved as today; two guards on one key report the earlier reason.
 
@@ -1429,7 +1429,18 @@ Approved: 2026-10-12. The README sections Design decisions and Known limitations
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 320 tests. A fake clock lets one response finish past the cap and refuses the next claim. `maxTotalAttempts: 1` fetches `robots.txt` and not the page, or the page when robots is off. Two workers and three child URLs request only the first child; the second is `budget`, the third stays `queued`, and the child's link is not reserved.
 - **Lesson learned:** The stop empties the waiting workers. It does not empty the queue, and it does not undo a claim that already succeeded.
 
+### 2026-10-12 - Trap guards on a discovered key
+
+- **Problem:** `maxPages` still spent a reservation on a very long URL, a deep path, or a repeated segment.
+- **Chosen solution:** `maxUrlLength`, `maxPathDepth`, and `maxSegmentRepeats` default to `2048`, `16`, and `2`. `0` is a `ConfigError`. The flags are `--max-url-length`, `--max-path-depth`, and `--max-segment-repeats`. On a discovered key, after crawl depth and before `maxPages`, the first matching guard wins: `url-length`, then `path-depth`, then `repeated-segment`. The record is skipped, enters `seen`, is not fetched, and does not count as a reservation. Path depth splits the key's path, drops the leading empty segment, and counts what remains, so `/` is 0 and `/a//b` is 3. The query is not counted. A repeated segment is an exact, case-sensitive count of a non-empty segment. The start URL and redirect hops are not checked yet.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 335 tests. A key one character past the cap is `url-length` and the next short URL is still reserved. A link past `maxDepth` stays `depth-limit`. `/a//b` is `path-depth`. `/a/a/a` is `repeated-segment` and `/A/a/A` is not. A key that trips all three reports `url-length`.
+- **Lesson learned:** The guard looks at the canonical key. A query full of slashes does not deepen the path, and an empty segment between slashes does.
+
 ## Change Log
+
+### 2026-10-12 (Trap guards on a discovered key)
+
+- Discovered URLs are skipped for length, path depth, or a repeated segment before they take a `maxPages` slot. The start URL and redirect hops are not checked yet.
 
 ### 2026-10-12 (Budget page results)
 
