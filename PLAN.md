@@ -467,12 +467,12 @@ Integration tests use a real server, not a `fetch` mock.
 
 ## Current Status
 
-**Active milestone:** Milestone 3 - CLI and reports. The checklist is complete. Milestone 4 has not started.
+**Active milestone:** Milestone 4 - CV cutoff. The crawl is documented in the README, and the fixture demo prints a summary. Known limitations have not been written.
 
 **Known behavior of the code today:**
 
 - `[x]` A frontier crawl, config validation, a robots manager on `robots-parser`, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 255 tests.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 257 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
 - `[x]` `npm start` from `backend/` runs `src/main.js` through `runCli`. A bad URL or flag exits `2`. A finished crawl exits `0`, including when pages failed. A fatal error or a failed `--output` write exits `1`. The second SIGINT exits `130`. The default stdout artifact is the console summary. `--format json` or `csv` without `--output` puts that artifact on stdout and the summary on stderr. `--output` writes the chosen format and still prints the summary.
@@ -603,8 +603,8 @@ The console summary in Output is not part of this milestone.
 
 **Goal:** The README can stand next to the code in a portfolio review.
 
-- `[ ]` Document the queue, commit order, stable order, redirect identity, the politeness split, the failure model, and the defaults.
-- `[ ]` Include one copy-paste demo against the local fixture and one sample JSON report.
+- `[x]` Document the queue, commit order, stable order, redirect identity, the politeness split, the failure model, and the defaults.
+- `[x]` Include one copy-paste demo against the local fixture and one sample JSON report.
 - `[ ]` List known limitations: no JavaScript rendering, no subdomain crawl, no sitemap crawl, no resume, single process, UTF-8 decoding only, non-UTF-8 query bytes such as `%FF` and `%FE` sharing one key, `nofollow` not honored, a slow page delays reservation of later pages' links, and one origin's backoff holds a worker.
 - `[ ]` Agent drafts the design-decisions and limitations sections. Author reviews and approves them.
 - `[ ]` Add a learning-log entry for the queue, commit order, and robots fail-closed behavior.
@@ -1029,7 +1029,29 @@ These replace the looser readings from the first draft of this checkpoint.
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 255 tests.
 - **Lesson learned:** `reserved` counts fetch reservations. A `depth-limit` record is in the summary and is not a reservation, so depth `0` reports `reserved 1` and three skipped children.
 
+### 2026-10-12 - README tour
+
+- **Problem:** The README still said the politeness gate was open, that `robots-parser` was unused, and that a Desktop CSV and a hit-count sort remained. A reader could not see how the queue, commit order, or failures actually work.
+- **Chosen solution:** The README now describes the queue, commit order, stable order, redirect identity, the split between `concurrency` and politeness, the failure model, and the defaults. The full canonical-key procedure stays in this file.
+- **How it was verified:** Read against Cemented Behavior. `npm run verify` is still the suite gate.
+- **Lesson learned:** The tour is the mechanism in plain language. A second copy of the key algorithm would drift.
+
+### 2026-10-12 - Fixture demo
+
+- **Problem:** The fixture existed only inside Jest. A reader had no command that starts it, crawls it, and exits.
+- **Chosen solution:** `node backend/tests/fixtures/demo.js` starts the local site, runs the CLI at depth 1 with no gap, and prints the summary. `--format json` prints a `CrawlResult`. The README includes that command and one sample from a real run, with the port written as `9`.
+- **How it was verified:** `npm run verify`. Lint is clean. The suite has 257 tests. The demo test expects exit 0 and the `ok`, `skipped`, and `failed` lines.
+- **Lesson learned:** The sample counts are part of the contract. `/secret` is reserved and not fetched. The other-origin link is not reserved.
+
 ## Change Log
+
+### 2026-10-12 (Fixture demo)
+
+- `node backend/tests/fixtures/demo.js` crawls the local site and prints the summary. The README includes that command and one sample JSON report.
+
+### 2026-10-12 (README tour)
+
+- The README documents the queue, commit order, stable order, redirect identity, politeness, failures, and the defaults.
 
 ### 2026-10-12 (CLI process)
 
