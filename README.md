@@ -74,6 +74,58 @@ The first Ctrl+C stops handing out queued work, lets in-flight requests finish, 
 
 An omitted flag uses the default. `--depth 0` is a real setting, not "missing". `--format` is `console`, `json`, or `csv`. With `json` or `csv` and no `--output`, that format is the only thing on stdout and the summary goes to stderr. `--output` writes the chosen format to that path, and the summary stays on stdout.
 
+## Design decisions
+
+These are the choices behind the procedures above. [PLAN.md](PLAN.md) has the full rules.
+
+### One queue, a fixed set of workers
+
+One `crawl()` call creates its own frontier and `concurrency` worker loops. The queue, the `seen` map, and the commit buffer belong to that call. A worker takes one URL, finishes it, and takes another. The number of workers is the cap on in-flight work.
+
+### The key is identity. The spelling is the request.
+
+`canonicalKey` decides whether two URLs are the same page. The request uses the spelling that was reserved: the earliest `href` on the page for that key, with the fragment removed. A later spelling of the same key leaves that request alone. Sorting the keys on a page orders the records and leaves the spelling alone.
+
+### A URL is reserved before it is fetched
+
+The `seen` check and the insert are one synchronous step, so two workers cannot both accept the same key. `maxPages` counts those reservations. The count includes the start URL and a URL that robots later refuses. An other-origin link, a link past `maxDepth`, and a link past `maxPages` are records, and they do not take a reservation.
+
+### Links are reserved in dequeue order
+
+A worker finishes when the network answers. That order changes between runs, so it does not choose the next links.
+
+`take()` numbers pages `0`, `1`, `2` before the request starts. A finished page waits until its number is next. Its links are reserved, and the counter advances. A skip or a failure commits an empty list, so a missing number cannot freeze the queue. The same responses therefore produce the same `pages` array for any `concurrency`. Fetching stays concurrent. Reservation waits.
+
+The price is in [Known limitations](#known-limitations): a slow page holds up the links from pages that already finished behind it.
+
+Example. `concurrency` is 2 and `maxPages` is 4. The start page links to `/c` and then `/b`. Sorted by key, those are `/b` then `/c`. The commit of the start page reserves B, then C. One reservation remains. B is taken as sequence 1 and answers in 500 ms, with links `/x` and `/y`. C is sequence 2 and answers in 10 ms, with links `/x` and `/z`. C waits in the buffer. B commits first. `/x` takes the last reservation, `/y` is `page-limit`, and `discoveredFrom` of `/x` is B. C then commits. `/x` is already seen, and `/z` is `page-limit`. The creation order is the start page, B, C, `/x`, `/y`, `/z`.
+
+### Every redirect hop is checked
+
+The HTTP client returns a redirect and leaves it there. The worker handles `301`, `302`, `303`, `307`, and `308` one hop at a time, and stops after 5. Each hop is a scope check and a robots check before anyone requests it. A hop that stays on the start origin and is free becomes an alias of the same record. An alias does not take another `maxPages` slot. The record keeps its original depth and `discoveredFrom`. A hop to another origin is `skipped` / `redirect-off-origin` and is not requested. A hop that returns to this chain is `failed` / `redirect-loop`.
+
+### Politeness is a second limit
+
+`concurrency` is how many workers exist. `perOriginLimit` is how many of them may hold a lease on one origin. `minIntervalMs` is the gap between request starts on that origin. The next start time is stored before the wait. A parsed `Crawl-delay` replaces that gap only when it is larger, and the result is capped at 10 seconds.
+
+`robots.txt` uses the lease the worker already holds. The manager does not take a second lease. With `perOriginLimit` set to 1, a second lease would wait for a release that cannot happen until that fetch finished.
+
+### An unreadable robots.txt closes the origin
+
+`robots-parser` is the only allow and crawl-delay implementation. The product token is the user agent up to the first `/` or space. The default token is `WebcrawlerBot`. A group written for that token is its whole policy. The `*` group applies only when the token has no group of its own.
+
+A 2xx body is parsed. An empty 2xx body allows every path and sets no crawl-delay. A 4xx other than `429`, including a missing file, allows every path and sets no crawl-delay. `429`, a 5xx, a network failure, a timeout, a body over 500 KiB (512000 bytes), or a failed robots redirect closes the origin. This URL and later URLs there are `skipped` / `robots-unavailable` and are not requested. Pages already fetched stay as they are. A status that is neither a parsed body, nor a 4xx other than `429`, nor a redirect this loop follows, also closes the origin. `304` and `100` are in that group. A disallowed path is `skipped` / `robots` and is not requested. `--no-respect-robots` skips the file and allows every path.
+
+### A failed page stays in the result
+
+Bad configuration exits `2` before any fetch. A classified page failure is a record. The crawl continues, and a finished crawl exits `0`. An unexpected exception exits `1` after the workers return. The first Ctrl+C finishes in-flight work and prints `interrupted`. The second exits `130` and prints no report.
+
+Retries for `timeout`, `connect`, `reset`, and statuses `429`, `500`, `502`, `503`, and `504` stay on the same reservation. The worker holds its lease through the backoff.
+
+### The report follows creation order
+
+Console, JSON, and CSV print `pages` in the order the records were created. A file is written only for `--output`.
+
 ## Demo
 
 From the repository root, with Node 24. The local site lives in [backend/tests/fixtures/demo.js](backend/tests/fixtures/demo.js). It serves a home page, `/docs`, a `robots.txt` that disallows `/secret`, a 404, a text file, and a link to `https://example.com/outside`. The command sets `--depth 1` and `--min-interval 0`, then runs the CLI. The port changes every run. The lines below are from one run with the port written as `9`.
@@ -253,6 +305,19 @@ node backend/src/main.js https://example.com/ --depth 1 --max-pages 20
   }
 }
 ```
+
+## Known limitations
+
+- **No JavaScript rendering.** Links come from `<a href>` in the HTML body. The parser does not run scripts, so a URL that appears only after a script runs is never queued.
+- **No subdomain crawl.** Scope is the start origin: scheme, host, and port. `https://blog.example.com/` discovered from `https://example.com/` is `skipped` / `other-origin`.
+- **No sitemap crawl.** A `Sitemap` line in `robots.txt` is ignored. The crawl follows links from HTML.
+- **No resume.** The queue lives in the process. The first Ctrl+C prints the partial result. The next run starts again from the start URL.
+- **Single process.** One Node.js process runs `concurrency` async worker loops. There is no second machine and no separate job queue.
+- **UTF-8 decoding only.** Response bodies are decoded as UTF-8. A `charset` parameter does not select another decoder.
+- **`%FF` and `%FE` share one query key.** The query goes through `URLSearchParams`. Bytes that are not valid UTF-8 become U+FFFD, so `?q=%FF` and `?q=%FE` are both the key query `q=%EF%BF%BD`. In the path, `%7E` and `%7e` stay different.
+- **`nofollow` is not honored.** `rel="nofollow"`, `<meta name="robots">`, and `X-Robots-Tag` leave the queue unchanged. An `href` is reserved when the other rules allow it.
+- **A slow page delays later reservations.** Sequence 2 can finish while sequence 1 is still in flight. Its links stay in the buffer until sequence 1 commits. That wait is what keeps the `pages` array stable. The example is under [Links are reserved in dequeue order](#links-are-reserved-in-dequeue-order).
+- **One origin's backoff holds a worker.** A retry sleeps inside the HTTP client while that worker still holds the origin's lease. During the sleep the worker does not take another URL.
 
 ## Project structure
 

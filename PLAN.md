@@ -467,7 +467,7 @@ Integration tests use a real server, not a `fetch` mock.
 
 ## Current Status
 
-**Active milestone:** Milestone 4 - CV cutoff. The crawl is documented in the README, and the fixture demo prints a summary. Known limitations have not been written.
+**Active milestone:** Milestone 4 - CV cutoff. The README draft now has Design decisions and Known limitations. The author has not approved that draft. Milestone 5 has not started.
 
 **Known behavior of the code today:**
 
@@ -605,9 +605,9 @@ The console summary in Output is not part of this milestone.
 
 - `[x]` Document the queue, commit order, stable order, redirect identity, the politeness split, the failure model, and the defaults.
 - `[x]` Include one copy-paste demo against the local fixture and one sample JSON report.
-- `[ ]` List known limitations: no JavaScript rendering, no subdomain crawl, no sitemap crawl, no resume, single process, UTF-8 decoding only, non-UTF-8 query bytes such as `%FF` and `%FE` sharing one key, `nofollow` not honored, a slow page delays reservation of later pages' links, and one origin's backoff holds a worker.
-- `[ ]` Agent drafts the design-decisions and limitations sections. Author reviews and approves them.
-- `[ ]` Add a learning-log entry for the queue, commit order, and robots fail-closed behavior.
+- `[x]` List known limitations: no JavaScript rendering, no subdomain crawl, no sitemap crawl, no resume, single process, UTF-8 decoding only, non-UTF-8 query bytes such as `%FF` and `%FE` sharing one key, `nofollow` not honored, a slow page delays reservation of later pages' links, and one origin's backoff holds a worker.
+- `[-]` Agent drafts the design-decisions and limitations sections. Author reviews and approves them.
+- `[x]` Add a learning-log entry for the queue, commit order, and robots fail-closed behavior.
 
 **Done when:** Milestones 0–3 are checked, and a reader can run the demo from the README alone.
 
@@ -1043,7 +1043,24 @@ These replace the looser readings from the first draft of this checkpoint.
 - **How it was verified:** `npm run verify`. Lint is clean. The suite has 257 tests. The demo test expects exit 0 and the `ok`, `skipped`, and `failed` lines.
 - **Lesson learned:** The sample counts are part of the contract. `/secret` is reserved and not fetched. The other-origin link is not reserved.
 
+### 2026-10-12 - Queue, commit order, and robots fail-closed
+
+Drafted for the Milestone 4 checkpoint. The author has not approved the README sections yet.
+
+- **Problem:** A reviewer will ask why concurrent fetches still produce one `pages` array, and why a failed `robots.txt` skips the rest of the origin.
+- **Chosen solution:** One crawl owns one FIFO queue and `concurrency` worker loops. `take()` numbers an item before the request. Finished items wait in a buffer, and links are reserved only for the next number. A skip or a failure commits an empty list. The same responses produce the same records for any `concurrency`.
+
+  Example, already used at the Milestone 1 checkpoint. `concurrency` is 2 and `maxPages` is 4. The start page links to `/c` then `/b`. Sorted, the queue is B, then C, and one reservation remains. B is sequence 1 and answers in 500 ms with `/x` and `/y`. C is sequence 2 and answers in 10 ms with `/x` and `/z`. C waits. B commits first, so `/x` is discovered from B and `/y` is `page-limit`. C then finds `/x` already seen, and `/z` is `page-limit`. Creation order is the start page, B, C, `/x`, `/y`, `/z`. If C's finish had reserved the links, `/x` would belong to C and the later records would be `/z` then `/y`.
+
+  `robots.txt` fails closed when it cannot be used. A 2xx body is parsed. A 4xx other than `429` allows the origin and sets no crawl-delay. `429`, a 5xx after retries, a network failure, a timeout, `too-large`, or a failed robots redirect makes this record and every later record on that origin `skipped` / `robots-unavailable`. Records already fetched stay. A disallowed path is `skipped` / `robots` and is not requested. The README states the same rules under Design decisions, and lists the accepted limits under Known limitations.
+- **How it was verified:** Read against Cemented Behavior for the frontier, commit order, robots, and the query step that maps `%FF` and `%FE` to `q=%EF%BF%BD`. Node's `URLSearchParams` produces that shared key. `npm run verify` is unchanged: lint is clean and the suite has 257 tests. No crawl behavior changed.
+- **Lesson learned:** Stable order has a cost. Sequence 2 can be finished and still unable to reserve links until sequence 1 commits. Fail-closed is the other side of the same idea: an unknown robots policy is not treated as permission.
+
 ## Change Log
+
+### 2026-10-12 (Milestone 4 draft)
+
+- The README lists the known limitations and drafts Design decisions, including dequeue order and robots fail-closed. The learning log records the same queue example. Author approval is still open.
 
 ### 2026-10-12 (Fixture demo)
 
