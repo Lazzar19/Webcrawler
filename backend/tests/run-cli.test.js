@@ -27,6 +27,40 @@ function resultFor(startUrl) {
   };
 }
 
+test("--help prints usage and does not crawl", async () => {
+  const io = streams();
+  let called = false;
+  const code = await runCli(["--help", "https://example.com/"], {
+    ...io,
+    signals: new EventEmitter(),
+    crawl() {
+      called = true;
+    },
+  });
+
+  expect(code).toBe(0);
+  expect(called).toBe(false);
+  expect(io.err()).toBe("");
+  expect(io.out()).toContain("npm start -- <url> [flags]");
+  expect(io.out()).toContain("--max-pages <n>");
+  expect(io.out()).toContain("--no-canonical");
+  expect(io.out()).toContain("--help, -h");
+});
+
+test("-h is the same help text", async () => {
+  const io = streams();
+  const code = await runCli(["-h"], {
+    ...io,
+    signals: new EventEmitter(),
+    crawl() {
+      throw new Error("crawled");
+    },
+  });
+
+  expect(code).toBe(0);
+  expect(io.out()).toContain("--depth <n>");
+});
+
 test("a user agent with a newline exits 2 and does not crawl", async () => {
   const io = streams();
   let called = false;

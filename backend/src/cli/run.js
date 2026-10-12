@@ -3,6 +3,7 @@ const { ConfigError } = require("../crawler/crawl-config.js");
 const { crawl } = require("../crawler/crawl.js");
 const { renderReport, normalizeFormat } = require("../report/render.js");
 const { createCliConfig } = require("./cli-config.js");
+const { formatHelp } = require("./help.js");
 const { formatTrace } = require("../crawler/trace.js");
 
 const EXIT_OK = 0;
@@ -26,6 +27,10 @@ async function runCli(argv, dependencies = {}) {
   let format;
   try {
     invocation = createCliConfig(argv);
+    if (invocation.help) {
+      stdout.write(formatHelp());
+      return EXIT_OK;
+    }
     format = normalizeFormat(invocation.format);
     if (invocation.details && format !== "console") {
       throw new ConfigError("--details is only valid with console output");

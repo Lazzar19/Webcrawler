@@ -21,6 +21,7 @@ const OPTIONS = {
   output: { type: "string" },
   details: { type: "boolean" },
   trace: { type: "boolean" },
+  help: { type: "boolean", short: "h" },
 };
 
 function parseCliArgs(argv) {
@@ -36,11 +37,23 @@ function parseCliArgs(argv) {
     throw new ConfigError(error.message);
   }
 
+  const values = parsed.values;
+  if (values.help === true) {
+    return {
+      help: true,
+      startUrl: parsed.positionals[0],
+      options: {},
+      format: undefined,
+      output: undefined,
+      details: false,
+      trace: false,
+    };
+  }
+
   if (parsed.positionals.length > 1) {
     throw new ConfigError("Expected one URL");
   }
 
-  const values = parsed.values;
   const options = {};
   if (values.depth !== undefined) {
     options.maxDepth = values.depth;
@@ -89,6 +102,7 @@ function parseCliArgs(argv) {
   }
 
   return {
+    help: false,
     startUrl: parsed.positionals[0],
     options,
     format: values.format,

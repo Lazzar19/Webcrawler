@@ -7,6 +7,42 @@ A single-process command-line crawler. It fetches one origin, keeps a record for
 ![Jest](https://img.shields.io/badge/tested%20with-jest-orange?style=flat&logo=jest)
 ![License](https://img.shields.io/badge/license-ISC-blue?style=flat)
 
+## Commands
+
+From the repository root, with Node 24. One command is one crawl. The URL is the only positional argument. Flags may come before or after it.
+
+```bash
+npm install --prefix backend
+npm run verify
+node backend/tests/fixtures/demo.js
+```
+
+`verify` runs the linter, then the tests. The demo starts a local site and prints the summary. It already passes `--depth 1` and `--min-interval 0`, so do not pass those two again. These three commands are the report check:
+
+```bash
+node backend/tests/fixtures/demo.js
+node backend/tests/fixtures/demo.js --details
+node backend/tests/fixtures/demo.js --format json --trace
+```
+
+`--details` adds the page table on stdout. `--format json` or `--format csv` puts that artifact on stdout and the summary on stderr. `--trace` stays on stderr. `--format json --details` exits `2` before a crawl.
+
+To crawl another origin, `node` and `npm start` take the same arguments. The `--` after `start` belongs to npm:
+
+```bash
+node backend/src/main.js https://example.com/ --depth 1 --max-pages 20
+npm start -- https://example.com/ --depth 1 --max-pages 20
+```
+
+`--help` and `-h` print every flag, its default, and these rules. They do not crawl.
+
+```bash
+npm start -- --help
+node backend/src/main.js --help
+```
+
+The flag table is under [Defaults](#defaults). The sample summary is under [Demo](#demo).
+
 ## About
 
 The engine is a fixed set of workers pulling from one queue. URL identity, robots, timeouts, politeness, trap guards, and content identity are separate decisions, and the tests lock them against a local HTTP server. [PLAN.md](PLAN.md) is the contract. This file is the tour.
@@ -95,7 +131,7 @@ The first Ctrl+C stops handing out queued work, lets in-flight requests finish, 
 | `--format` | stdout format | `console` |
 | `--output` | file path | none |
 
-An omitted flag uses the default. `--depth 0` is a real setting, not "missing". `--max-duration`, `--max-attempts`, and the three trap flags reject `0`. `--no-respect-robots`, `--no-dedupe-content`, and `--no-canonical` take no value. A form such as `--no-dedupe-content=true` exits `2`. `--format` is `console`, `json`, or `csv`. With `json` or `csv` and no `--output`, that format is the only thing on stdout and the summary goes to stderr. `--output` writes the chosen format to that path, and the summary stays on stdout. `--details` adds a page table after the summary. It takes no value, and `--format json --details` or `--format csv --details` exits `2` before a crawl. `--trace` takes no value. Its lines go to stderr and never to stdout. When the summary is already on stderr, the lines follow it. Otherwise stderr is only those lines.
+An omitted flag uses the default. `--depth 0` is a real setting, not "missing". `--max-duration`, `--max-attempts`, and the three trap flags reject `0`. `--no-respect-robots`, `--no-dedupe-content`, `--no-canonical`, `--details`, `--trace`, and `--help` take no value. `-h` is `--help`. A form such as `--no-dedupe-content=true` or `--help=true` exits `2`. `--help` prints the flag list and does not crawl. `--format` is `console`, `json`, or `csv`. With `json` or `csv` and no `--output`, that format is the only thing on stdout and the summary goes to stderr. `--output` writes the chosen format to that path, and the summary stays on stdout. `--details` adds a page table after the summary. It takes no value, and `--format json --details` or `--format csv --details` exits `2` before a crawl. `--trace` takes no value. Its lines go to stderr and never to stdout. When the summary is already on stderr, the lines follow it. Otherwise stderr is only those lines.
 
 ## Design decisions
 

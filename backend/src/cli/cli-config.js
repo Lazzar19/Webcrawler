@@ -24,6 +24,9 @@ function integerFlag(field, raw) {
 
 function createCliConfig(argv) {
   const parsed = parseCliArgs(argv);
+  if (parsed.help) {
+    return { help: true };
+  }
   const options = {};
   if (parsed.startUrl !== undefined) {
     options.startUrl = parsed.startUrl;
@@ -33,6 +36,7 @@ function createCliConfig(argv) {
   }
 
   return {
+    help: false,
     config: createCrawlConfig(options),
     format: parsed.format,
     output: parsed.output,

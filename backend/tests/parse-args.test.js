@@ -10,6 +10,7 @@ test("a positional URL is startUrl and omitted flags stay omitted", () => {
   expect(parsed.output).toBeUndefined();
   expect(parsed.details).toBe(false);
   expect(parsed.trace).toBe(false);
+  expect(parsed.help).toBe(false);
 });
 
 test("numeric flags stay the typed characters, including an explicit 0", () => {
@@ -162,6 +163,18 @@ test("an unknown flag is a ConfigError", () => {
   expect(() => {
     parseCliArgs(["https://example.com/", "--max-bytes", "10"]);
   }).toThrow(/--max-bytes/);
+});
+
+test("--help and -h ask for help and do not require a URL", () => {
+  expect(parseCliArgs(["--help"]).help).toBe(true);
+  expect(parseCliArgs(["-h"]).help).toBe(true);
+  expect(parseCliArgs(["--help", "https://example.com/"]).help).toBe(true);
+  expect(parseCliArgs(["--help", "https://example.com/", "https://other.example/"]).help).toBe(true);
+});
+
+test("a value on --help is a ConfigError", () => {
+  expect(() => parseCliArgs(["--help=true"])).toThrow(ConfigError);
+  expect(() => parseCliArgs(["--help=true"])).toThrow(/does not take an argument/);
 });
 
 test("a flag that requires a value rejects a missing one", () => {

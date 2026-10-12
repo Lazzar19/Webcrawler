@@ -207,9 +207,11 @@ Fixed constants, not configuration: retry delay cap 5000 ms, crawl-delay cap 10 
 | `--output` | file path, not a config field |
 | `--details` | presentation flag, not a config field |
 | `--trace` | presentation flag, not a config field |
+| `--help`, `-h` | usage text, not a config field |
 
 - `--no-respect-robots`, `--no-dedupe-content`, and `--no-canonical` take no value. When the flag is absent, that field is omitted and the default stays `true`.
 - `--details` and `--trace` take no value. They are `type: "boolean"` in `parseArgs`. A form with a value, such as `--details=true` or `--trace=1`, is a `ConfigError`. When the flag is absent, the field is false. Neither flag is passed to `createCrawlConfig`, and neither appears in `CrawlResult.config`.
+- `--help` and `-h` take no value. When either is present, the process prints the usage text to stdout and exits `0` before a crawl, even when a URL is missing or extra positionals are present. A form with a value, such as `--help=true`, is a `ConfigError`. `--help` is not passed to `createCrawlConfig` and does not appear in `CrawlResult.config`. An unknown flag still fails before that text is printed.
 - Zero positionals leaves `startUrl` empty for the validation step. A second positional is a `ConfigError`.
 - An unknown flag, or a flag that requires a value and has none, is a `ConfigError`. The parser does not accept a second name for the same option.
 - Validation reads that result and calls `createCrawlConfig`. A numeric flag must be one or more digits. `0` becomes the number 0 and is passed in, so the default does not replace it. Any other spelling is a `ConfigError`. `createCrawlConfig` then applies the URL rule and the positive or non-negative rule. `--format` and `--output` stay beside the config and are not checked here.
@@ -690,10 +692,10 @@ Integration tests use a real server, not a `fetch` mock.
 **Known behavior of the code today:**
 
 - `[x]` A frontier crawl, config validation, a robots manager on `robots-parser`, and a console/CSV report exist under `backend/`.
-- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 365 tests.
+- `[x]` Jest covers the canonical key, link resolution, the frontier, the fixture crawl, config validation, robots parsing, and sort order, plus the Milestone 1 checkpoint tests and the setup tests. The suite has 369 tests.
 - `[x]` Root `npm test` runs the backend suite. `npm run verify` runs lint, then that suite.
 - `[x]` GitHub Actions installs `backend/` and runs `npm run verify` on the Node version in `backend/.nvmrc`.
-- `[x]` `npm start` from `backend/` runs `src/main.js` through `runCli`. A bad URL or flag exits `2`. A finished crawl exits `0`, including when pages failed. A fatal error or a failed `--output` write exits `1`. The second SIGINT exits `130`. The default stdout artifact is the console summary. `--format json` or `csv` without `--output` puts that artifact on stdout and the summary on stderr. `--output` writes the chosen format and still prints the summary.
+- `[x]` `npm start` from the repository root runs `node backend/src/main.js`. `npm start --` forwards the URL and flags. `--help` and `-h` print usage to stdout and exit `0` before a crawl. `npm start` from `backend/` runs `src/main.js` through `runCli`. A bad URL or flag exits `2`. A finished crawl exits `0`, including when pages failed. A fatal error or a failed `--output` write exits `1`. The second SIGINT exits `130`. The default stdout artifact is the console summary. `--format json` or `csv` without `--output` puts that artifact on stdout and the summary on stderr. `--output` writes the chosen format and still prints the summary.
 - `[x]` The duplicate root crawler and the Vite starter are gone.
 - `[x]` `concurrency` is the worker count. `p-limit` is gone. A parent no longer holds a slot while waiting for children.
 - `[x]` `maxPages` counts fetch reservations. The default is `50`. `Infinity` is rejected.
@@ -1458,6 +1460,10 @@ Approved: 2026-10-12. The README sections Design decisions and Known limitations
 - **Lesson learned:** Commit order is the identity order. Finish order can fetch both copies, and only the earlier sequence decides which links enter the queue.
 
 ## Change Log
+
+### 2026-10-12 (CLI help)
+
+- `--help` and `-h` print the flag list and exit 0 before a crawl. Root `npm start --` forwards the same arguments as `node backend/src/main.js`.
 
 ### 2026-10-12 (Canonical target and the commit winner)
 
