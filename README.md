@@ -1,210 +1,34 @@
-# Web Crawler
+# Webcrawler
 
-A single-process command-line crawler. It fetches one origin, keeps a record for every URL it accepts or skips, and prints that result. The CLI is the product. There is no web UI in this repository.
+A polite, deterministic command-line web crawler for one origin, written in Node.js.
+It keeps a record for every URL it finds, including why it was skipped or why it failed,
+and returns the same results in the same order at any concurrency.
 
+![CI](https://github.com/Lazzar19/Webcrawler/actions/workflows/ci.yml/badge.svg)
 ![Node.js](https://img.shields.io/badge/Node.js-24-green?style=flat&logo=node.js)
-![JavaScript](https://img.shields.io/badge/JavaScript-ES2022-yellow?style=flat&logo=javascript)
 ![Jest](https://img.shields.io/badge/tested%20with-jest-orange?style=flat&logo=jest)
 ![License](https://img.shields.io/badge/license-ISC-blue?style=flat)
 
-## Commands
+**Highlights:** fixed worker pool over one queue · stable results in queue order ·
+per-origin rate limiting with robots.txt `Crawl-delay` · hop-by-hop redirect checks ·
+timeouts, retries with backoff, size limits · URL-trap guards · duplicate-page detection ·
+console / JSON / CSV output · tests against a local HTTP server.
 
-From the repository root, with Node 24. One command is one crawl. The URL is the only positional argument. Flags may come before or after it.
+## Quick start
+
+Requires Node 24 (`backend/.nvmrc`).
 
 ```bash
 npm install --prefix backend
-npm run verify
-node backend/tests/fixtures/demo.js
+npm run verify                      # lint, then tests
+node backend/tests/fixtures/demo.js # crawl a local demo site
 ```
 
-`verify` runs the linter, then the tests. The demo starts a local site and prints the summary. It already passes `--depth 1` and `--min-interval 0`, so do not pass those two again. These three commands are the report check:
-
-```bash
-node backend/tests/fixtures/demo.js
-node backend/tests/fixtures/demo.js --details
-node backend/tests/fixtures/demo.js --format json --trace
-```
-
-`--details` adds the page table on stdout. `--format json` or `--format csv` puts that artifact on stdout and the summary on stderr. `--trace` stays on stderr. `--format json --details` exits `2` before a crawl.
-
-To crawl another origin, `node` and `npm start` take the same arguments. The `--` after `start` belongs to npm:
-
-```bash
-node backend/src/main.js https://example.com/ --depth 1 --max-pages 20
-npm start -- https://example.com/ --depth 1 --max-pages 20
-```
-
-`--help` and `-h` print every flag, its default, and these rules. They do not crawl.
-
-```bash
-npm start -- --help
-node backend/src/main.js --help
-```
-
-The flag table is under [Defaults](#defaults). The sample summary is under [Demo](#demo).
-
-## About
-
-The engine is a fixed set of workers pulling from one queue. URL identity, robots, timeouts, politeness, trap guards, and content identity are separate decisions, and the tests lock them against a local HTTP server. [PLAN.md](PLAN.md) is the contract. This file is the tour.
-
-## How a crawl works
-
-### Queue
-
-One crawl owns one FIFO queue and a `seen` map from canonical key to the record that owns it. `concurrency` is the number of worker loops, and that number is also the cap on in-flight work.
-
-The start URL is reserved first, at depth 0, and it is fetched even when its own key would trip a trap guard. For each later link the first matching rule wins. A key already in `seen` is ignored. A different origin is `skipped` / `other-origin`. A link past `maxDepth` is `skipped` / `depth-limit`. A canonical key longer than `maxUrlLength` is `skipped` / `url-length`. A path deeper than `maxPathDepth` is `skipped` / `path-depth`. A non-empty segment that occurs more than `maxSegmentRepeats` times is `skipped` / `repeated-segment`. When fetch reservations have already reached `maxPages`, the link is `skipped` / `page-limit`. Otherwise it is queued. The check and the insert happen together, with no await between them.
-
-The trap checks read the canonical key, after depth and before `maxPages`. Length is the JavaScript length of that key. Path depth splits the path and counts the segments after the leading slash, including an empty segment between slashes, so `/` is 0 and `/a//b` is 3. The query is not counted. A repeated segment is an exact, case-sensitive count. The first match wins: length, then path depth, then a repeated segment. A hit enters `seen`, is not fetched, and does not take a slot.
-
-`maxDepth` is inclusive. A page at the limit is fetched, and its new links become `depth-limit` records. `maxPages` counts fetch reservations, including the start URL. An other-origin skip, a depth skip, a trap skip, and a page-limit skip do not take a slot. A robots disallow does: the URL was reserved before the check.
-
-### Commit order
-
-Workers finish in network order. That order cannot decide which links are queued, or two runs would diverge.
-
-`take()` assigns a sequence number, `0`, then `1`, then `2`, before the worker starts the request. A finished item waits in a buffer. The frontier reserves links only for the next sequence number, then advances. A skipped or failed item commits an empty link list, so a hole cannot stall the queue. After Ctrl+C, a budget stop, or a fatal error the counter still advances, and nothing new is reserved. A canonical target is included in that rule.
-
-### Content identity
-
-Two URLs can still be different keys and the same HTML. That decision waits until the page commits, in dequeue order, so the worker that finishes first does not own the body. The hash is SHA-256 of the decoded body. An empty body has a hash. A non-HTML page, a failed page, and a page whose parser throws do not enter the set.
-
-A hash that is already stored makes the page `skipped` / `duplicate-content`. The status, content type, byte length, and attempts stay. Its links are not reserved, and a canonical target is not reserved either.
-
-The other commit rule reads the first `<link>` whose `rel` includes the token `canonical`. A later tag is ignored. A href that does not parse, has a username or password, is not `http` or `https`, leaves the start origin, or names this same record is ignored. Any other key makes the page `skipped` / `canonical`. Its own links are not reserved. The target is discovered at the same depth, through the origin, trap, and `maxPages` steps, with `discoveredFrom` set to this record. A target already in `seen` is not reserved again.
-
-`--no-dedupe-content` leaves the hash unused. `--no-canonical` leaves the tag unused. With both flags, links are reserved the way they were before this check.
-
-### Stable order
-
-On one page, several `href` values can share a key. The spelling that is fetched is the earliest in document order. The remaining keys are sorted, and that sort does not replace the spelling. The same responses therefore produce the same records, in the same order, for any `concurrency`.
-
-The queue is FIFO and reservation waits for commit order, so the crawl is breadth-first. A key is first discovered at its smallest depth.
-
-The canonical key is the identity, not the request URL. It drops the fragment, omits the default port, and sorts the query. The full procedure is in [PLAN.md](PLAN.md). The request uses the reserved spelling.
-
-### Redirects
-
-The HTTP client does not follow redirects. The worker handles `301`, `302`, `303`, `307`, and `308` one hop at a time, and stops after 5. A hop that stays on the start origin and is not already owned becomes an alias of this record. An alias does not take another `maxPages` slot. The record keeps its original depth and `discoveredFrom`. `finalUrl` is the last URL that was actually requested.
-
-A hop to another origin is `skipped` / `redirect-off-origin` and is not requested. A hop that returns to this chain is `failed` / `redirect-loop`. A sixth hop is `failed` / `redirect-limit`. A missing or unusable `Location` is `failed` / `bad-redirect`. A hop already owned by another record is `skipped` / `duplicate`. A hop that trips a trap guard is `skipped` with that guard's reason and is not requested. The check runs after the duplicate check and before robots. The hop key is an alias, the record keeps the attempts and the last status, and `finalUrl` stays the last URL that was requested.
-
-### Politeness
-
-`concurrency` and politeness are different limits. `concurrency` is how many workers exist. `perOriginLimit` is how many of those workers may hold a lease on one origin at once. A worker that cannot get a lease waits in a FIFO list for that origin.
-
-`minIntervalMs` is the minimum gap between request starts to the same origin. The gap covers first attempts, retries, redirect hops, and `robots.txt`. The next start time is stored before the wait, so two workers cannot claim the same instant. A robots `Crawl-delay` larger than `minIntervalMs` replaces the gap, and the gap is then capped at 10 seconds. The `robots.txt` fetch itself still uses `minIntervalMs`, because the file has not been parsed yet.
-
-### Failures
-
-A bad start URL or a bad flag stops the process before any fetch and exits `2`. A failed page is a record. The crawl continues, and a finished crawl exits `0` even when some pages failed. A crawl that stops for the budget also exits `0`. An unexpected exception exits `1`.
-
-`maxDurationMs` and `maxTotalAttempts` default to `null`. An omitted flag does not stop the crawl, and `0` is rejected. The duration is measured from the start of the crawl. The attempt cap counts every HTTP attempt that is about to start: the page, a retry, a redirect hop, and `robots.txt`. A claim that is already at the cap does not fetch. An attempt that already started can finish past the duration cap. The next claim is then refused.
-
-The first stop reason stays. A budget result prints `budget` where a finished crawl prints `completed`, and a later Ctrl+C does not replace it. A page that never starts a request is `skipped` / `budget`. A retry or a hop that already earned a failure or a redirect keeps that result. After the stop, queued URLs stay queued. There is no total-byte budget, and `--max-bytes` is not a flag.
-
-The page error kinds are `timeout`, `dns`, `connect`, `reset`, `tls`, `too-large`, `http-status`, `redirect-loop`, `redirect-limit`, `bad-redirect`, and `parse`. Non-HTML is `skipped` / `non-html`, and the body is not read. Retries cover `timeout`, `connect`, `reset`, and statuses `429`, `500`, `502`, `503`, and `504`. `dns`, `tls`, `too-large`, redirects, and every other status are not retried.
-
-If `robots.txt` cannot be read, the origin fails closed: later URLs there are `skipped` / `robots-unavailable`. A disallowed path is `skipped` / `robots` and is not requested.
-
-The first Ctrl+C stops handing out queued work, lets in-flight requests finish, and prints the partial result with `stopReason` `interrupted`. The second Ctrl+C exits `130` without a report.
-
-### Defaults
-
-| Flag | Field | Default |
-|---|---|---|
-| `--depth` | `maxDepth` | `2` |
-| `--max-pages` | `maxPages` | `50` |
-| `--concurrency` | `concurrency` | `5` |
-| `--per-origin` | `perOriginLimit` | `2` |
-| `--min-interval` | `minIntervalMs` | `200` |
-| `--timeout` | `timeoutMs` | `10000` |
-| `--max-duration` | `maxDurationMs` | `null` |
-| `--max-attempts` | `maxTotalAttempts` | `null` |
-| `--max-url-length` | `maxUrlLength` | `2048` |
-| `--max-path-depth` | `maxPathDepth` | `16` |
-| `--max-segment-repeats` | `maxSegmentRepeats` | `2` |
-| `--user-agent` | `userAgent` | `WebcrawlerBot/1.0 (+https://github.com/Lazzar19/webcrawler)` |
-| `--no-respect-robots` | `respectRobots` | `true` |
-| `--no-dedupe-content` | `dedupeContent` | `true` |
-| `--no-canonical` | `respectCanonical` | `true` |
-| `--format` | stdout format | `console` |
-| `--output` | file path | none |
-
-An omitted flag uses the default. `--depth 0` is a real setting, not "missing". `--max-duration`, `--max-attempts`, and the three trap flags reject `0`. `--no-respect-robots`, `--no-dedupe-content`, `--no-canonical`, `--details`, `--trace`, and `--help` take no value. `-h` is `--help`. A form such as `--no-dedupe-content=true` or `--help=true` exits `2`. `--help` prints the flag list and does not crawl. `--format` is `console`, `json`, or `csv`. With `json` or `csv` and no `--output`, that format is the only thing on stdout and the summary goes to stderr. `--output` writes the chosen format to that path, and the summary stays on stdout. `--details` adds a page table after the summary. It takes no value, and `--format json --details` or `--format csv --details` exits `2` before a crawl. `--trace` takes no value. Its lines go to stderr and never to stdout. When the summary is already on stderr, the lines follow it. Otherwise stderr is only those lines.
-
-## Design decisions
-
-These are the choices behind the procedures above. [PLAN.md](PLAN.md) has the full rules.
-
-### One queue, a fixed set of workers
-
-One `crawl()` call creates its own frontier and `concurrency` worker loops. The queue, the `seen` map, and the commit buffer belong to that call. A worker takes one URL, finishes it, and takes another. The number of workers is the cap on in-flight work.
-
-### The key is identity. The spelling is the request.
-
-`canonicalKey` decides whether two URLs are the same page. The request uses the spelling that was reserved: the earliest `href` on the page for that key, with the fragment removed. A later spelling of the same key leaves that request alone. Sorting the keys on a page orders the records and leaves the spelling alone.
-
-### A URL is reserved before it is fetched
-
-The `seen` check and the insert are one synchronous step, so two workers cannot both accept the same key. `maxPages` counts those reservations. The count includes the start URL and a URL that robots later refuses. An other-origin link, a link past `maxDepth`, a link that trips a trap guard, and a link past `maxPages` are records, and they do not take a reservation. The start URL is still fetched when its own key would trip a guard.
-
-### Links are reserved in dequeue order
-
-A worker finishes when the network answers. That order changes between runs, so it does not choose the next links.
-
-`take()` numbers pages `0`, `1`, `2` before the request starts. A finished page waits until its number is next. Its links are reserved, and the counter advances. A skip or a failure commits an empty list, so a missing number cannot freeze the queue. The same responses therefore produce the same `pages` array for any `concurrency`. Fetching stays concurrent. Reservation waits.
-
-The price is in [Known limitations](#known-limitations): a slow page holds up the links from pages that already finished behind it.
-
-Example. `concurrency` is 2 and `maxPages` is 4. The start page links to `/c` and then `/b`. Sorted by key, those are `/b` then `/c`. The commit of the start page reserves B, then C. One reservation remains. B is taken as sequence 1 and answers in 500 ms, with links `/x` and `/y`. C is sequence 2 and answers in 10 ms, with links `/x` and `/z`. C waits in the buffer. B commits first. `/x` takes the last reservation, `/y` is `page-limit`, and `discoveredFrom` of `/x` is B. C then commits. `/x` is already seen, and `/z` is `page-limit`. The creation order is the start page, B, C, `/x`, `/y`, `/z`.
-
-### Every redirect hop is checked
-
-The HTTP client returns a redirect and leaves it there. The worker handles `301`, `302`, `303`, `307`, and `308` one hop at a time, and stops after 5. Each hop is checked for scope, a loop, and a duplicate before a trap guard, and that guard runs before robots. A hop that stays on the start origin and is free becomes an alias of the same record. An alias does not take another `maxPages` slot. The record keeps its original depth and `discoveredFrom`. A hop to another origin is `skipped` / `redirect-off-origin` and is not requested. A hop that returns to this chain is `failed` / `redirect-loop`. A hop that trips a trap guard is not requested, and the robots rule does not hide that reason.
-
-### Politeness is a second limit
-
-`concurrency` is how many workers exist. `perOriginLimit` is how many of them may hold a lease on one origin. `minIntervalMs` is the gap between request starts on that origin. The next start time is stored before the wait. A parsed `Crawl-delay` replaces that gap only when it is larger, and the result is capped at 10 seconds.
-
-`robots.txt` uses the lease the worker already holds. The manager does not take a second lease. With `perOriginLimit` set to 1, a second lease would wait for a release that cannot happen until that fetch finished.
-
-### An unreadable robots.txt closes the origin
-
-`robots-parser` is the only allow and crawl-delay implementation. The product token is the user agent up to the first `/` or space. The default token is `WebcrawlerBot`. A group written for that token is its whole policy. The `*` group applies only when the token has no group of its own.
-
-A 2xx body is parsed. An empty 2xx body allows every path and sets no crawl-delay. A 4xx other than `429`, including a missing file, allows every path and sets no crawl-delay. `429`, a 5xx, a network failure, a timeout, a body over 500 KiB (512000 bytes), or a failed robots redirect closes the origin. This URL and later URLs there are `skipped` / `robots-unavailable` and are not requested. Pages already fetched stay as they are. A status that is neither a parsed body, nor a 4xx other than `429`, nor a redirect this loop follows, also closes the origin. `304` and `100` are in that group. A disallowed path is `skipped` / `robots` and is not requested. `--no-respect-robots` skips the file and allows every path.
-
-### A failed page stays in the result
-
-Bad configuration exits `2` before any fetch. A classified page failure is a record. The crawl continues, and a finished crawl exits `0`. An unexpected exception exits `1` after the workers return. The first Ctrl+C finishes in-flight work and prints `interrupted`. The second exits `130` and prints no report.
-
-Retries for `timeout`, `connect`, `reset`, and statuses `429`, `500`, `502`, `503`, and `504` stay on the same reservation. The worker holds its lease through the backoff.
-
-### A trap is refused before it takes a page
-
-`maxPages` is a count of URLs the crawl intends to fetch. A very long key, a deep path, or a repeated segment is skipped first, so it cannot fill that count. The start URL is the page the user named, so those guards do not apply to it. On a redirect they do, and they run before robots.
-
-### A budget stop is a result
-
-The duration and the attempt cap default to off. When one of them is set, the claim before the next HTTP attempt is what stops the crawl. The attempt that already passed the claim finishes. A page that never got a request is `skipped` / `budget`, and the process exits `0`. The first reason wins, so Ctrl+C after a budget stop still reports `budget`.
-
-### The same HTML does not feed the queue twice
-
-Reservation still deduplicates keys. The body is a second identity, decided when the page commits. The earlier sequence owns the hash. The later copy keeps the fetch and reserves nothing. A declared canonical URL is followed at the same depth, and the alias page's own links are not. Both switches default to on. Turning both off returns link reservation to the earlier crawl.
-
-### The report follows creation order
-
-JSON, CSV, and `--details` list `pages` in the order the records were created. The default console is a count summary and does not list those URLs. A file is written only for `--output`.
-
-## Demo
-
-From the repository root, with Node 24. The local site lives in [backend/tests/fixtures/demo.js](backend/tests/fixtures/demo.js). It serves a home page, `/docs`, a `robots.txt` that disallows `/secret`, a 404, a text file, and a link to `https://example.com/outside`. The command sets `--depth 1` and `--min-interval 0`, then runs the CLI. The port changes every run. The lines below are from one run with the port written as `9`.
-
-```bash
-npm install --prefix backend
-node backend/tests/fixtures/demo.js
-```
+## What a crawl looks like
+
+The demo site has a home page, `/docs`, a `robots.txt` that disallows `/secret`,
+a 404, a text file, and a link to `https://example.com/outside`. The demo sets
+`--depth 1` and `--min-interval 0`. The port changes every run.
 
 ```text
 completed http://127.0.0.1:9/ 104ms
@@ -229,17 +53,7 @@ robots
   http://127.0.0.1:9  parsed 200
 ```
 
-`/secret` was not requested. Neither was `https://example.com/outside`. `/secret` still counts as reserved, because the reservation happens before the robots check. The outside link does not. The summary does not print those URLs.
-
-The same demo takes the report flags. These three commands are the check for the terminal report:
-
-```bash
-node backend/tests/fixtures/demo.js
-node backend/tests/fixtures/demo.js --details
-node backend/tests/fixtures/demo.js --format json --trace
-```
-
-The first command is the summary above. `--details` prints that summary, then the page table. Rows stay in creation order. A URL longer than 64 characters is shortened only in this table. These rows are from the same run:
+`node backend/tests/fixtures/demo.js --details` adds one row per URL, in creation order:
 
 ```text
 pages
@@ -252,243 +66,99 @@ pages
   skipped   -       1      https://example.com/outside   other-origin
 ```
 
-`--format json --trace` prints the JSON report on stdout and the summary on stderr. Trace lines follow that summary and are not part of the JSON. The JSON from one run is under [Sample report](#sample-report).
+`/secret` and the outside link were never requested. A failed page is a record,
+not a crash: the crawl finishes and exits `0`.
 
-To crawl some other origin:
+## Crawl a real site
 
 ```bash
 node backend/src/main.js https://example.com/ --depth 1 --max-pages 20
-npm start -- https://example.com/ --depth 1 --max-pages 20
+npm start -- https://example.com/ --format json --output result.json
 ```
 
-### Docker
+| Flag | Default | Meaning |
+|---|---|---|
+| `--depth` | `2` | Inclusive; `0` fetches only the start URL |
+| `--max-pages` | `50` | URLs reserved for fetch, including the start URL |
+| `--concurrency` | `5` | Worker loops, and the cap on in-flight work |
+| `--per-origin` / `--min-interval` | `2` / `200` ms | Politeness per origin |
+| `--format` | `console` | `console`, `json`, or `csv` |
 
-The image is built from the repository root. It uses the Node version in `backend/.nvmrc` and runs as a user other than root. The default command is the same fixture demo. Nothing in this repository publishes the image.
+`--help` lists every flag and its default. `--details` adds the page table, `--trace`
+prints events to stderr. With `json` or `csv`, stdout carries only that format.
+Exit codes: `0` finished · `2` bad flag or URL · `1` fatal error · `130` second Ctrl+C.
 
-```bash
-docker build -t webcrawler .
-docker run --rm webcrawler
-```
+## Sample JSON (excerpt)
 
-```bash
-docker run --rm webcrawler --format json
-```
-
-To crawl another origin, replace the entrypoint:
-
-```bash
-docker run --rm --entrypoint node webcrawler backend/src/main.js https://example.com/ --depth 1 --max-pages 20
-```
-
-## Sample report
-
-`node backend/tests/fixtures/demo.js --format json` prints the `CrawlResult` on stdout and the summary on stderr. This is one run of that command. `startedAt`, `finishedAt`, `durationMs`, and `waitedMs` change between runs. The port in the sample is `9`.
+`node backend/tests/fixtures/demo.js --format json` prints the full `CrawlResult`.
+One page record, trimmed:
 
 ```json
 {
   "schemaVersion": 1,
-  "startUrl": "http://127.0.0.1:9/",
-  "startedAt": "2026-10-12T08:31:24.111Z",
-  "finishedAt": "2026-10-12T08:31:24.236Z",
-  "durationMs": 125,
   "stopReason": "completed",
-  "config": {
-    "maxDepth": 1,
-    "maxPages": 50,
-    "concurrency": 5,
-    "perOriginLimit": 2,
-    "minIntervalMs": 0,
-    "timeoutMs": 10000,
-    "maxResponseBytes": 1000000,
-    "retryCount": 2,
-    "retryBaseDelayMs": 500,
-    "respectRobots": true,
-    "userAgent": "WebcrawlerBot/1.0 (+https://github.com/Lazzar19/webcrawler)",
-    "maxDurationMs": null,
-    "maxTotalAttempts": null,
-    "maxUrlLength": 2048,
-    "maxPathDepth": 16,
-    "maxSegmentRepeats": 2,
-    "dedupeContent": true,
-    "respectCanonical": true,
-    "startUrl": "http://127.0.0.1:9/"
-  },
   "pages": [
     {
-      "canonicalUrl": "http://127.0.0.1:9/",
-      "requestedUrl": "http://127.0.0.1:9/",
-      "finalUrl": "http://127.0.0.1:9/",
-      "discoveredFrom": null,
-      "depth": 0,
-      "state": "ok",
-      "skipReason": null,
-      "waitedMs": 45,
-      "statusCode": 200,
-      "contentType": "text/html; charset=utf-8",
-      "durationMs": 5,
-      "byteLength": 161,
-      "attempts": 1,
-      "errorKind": null,
-      "errorMessage": null
-    },
-    {
-      "canonicalUrl": "http://127.0.0.1:9/docs",
-      "requestedUrl": "http://127.0.0.1:9/docs",
-      "finalUrl": "http://127.0.0.1:9/docs",
-      "discoveredFrom": "http://127.0.0.1:9/",
-      "depth": 1,
-      "state": "ok",
-      "skipReason": null,
-      "waitedMs": 0,
-      "statusCode": 200,
-      "contentType": "text/html; charset=utf-8",
-      "durationMs": 3,
-      "byteLength": 11,
-      "attempts": 1,
-      "errorKind": null,
-      "errorMessage": null
-    },
-    {
-      "canonicalUrl": "http://127.0.0.1:9/missing",
-      "requestedUrl": "http://127.0.0.1:9/missing",
-      "finalUrl": "http://127.0.0.1:9/missing",
-      "discoveredFrom": "http://127.0.0.1:9/",
-      "depth": 1,
-      "state": "failed",
-      "skipReason": null,
-      "waitedMs": 0,
-      "statusCode": 404,
-      "contentType": "text/html",
-      "durationMs": 13,
-      "byteLength": null,
-      "attempts": 1,
-      "errorKind": "http-status",
-      "errorMessage": "HTTP 404"
-    },
-    {
-      "canonicalUrl": "http://127.0.0.1:9/notes.txt",
-      "requestedUrl": "http://127.0.0.1:9/notes.txt",
-      "finalUrl": "http://127.0.0.1:9/notes.txt",
-      "discoveredFrom": "http://127.0.0.1:9/",
-      "depth": 1,
-      "state": "skipped",
-      "skipReason": "non-html",
-      "waitedMs": 10,
-      "statusCode": 200,
-      "contentType": "text/plain",
-      "durationMs": 3,
-      "byteLength": null,
-      "attempts": 1,
-      "errorKind": null,
-      "errorMessage": null
-    },
-    {
       "canonicalUrl": "http://127.0.0.1:9/secret",
-      "requestedUrl": "http://127.0.0.1:9/secret",
-      "finalUrl": null,
       "discoveredFrom": "http://127.0.0.1:9/",
       "depth": 1,
       "state": "skipped",
       "skipReason": "robots",
-      "waitedMs": null,
-      "statusCode": null,
-      "contentType": null,
-      "durationMs": null,
-      "byteLength": null,
-      "attempts": 0,
-      "errorKind": null,
-      "errorMessage": null
-    },
-    {
-      "canonicalUrl": "https://example.com/outside",
-      "requestedUrl": "https://example.com/outside",
-      "finalUrl": null,
-      "discoveredFrom": "http://127.0.0.1:9/",
-      "depth": 1,
-      "state": "skipped",
-      "skipReason": "other-origin",
-      "waitedMs": null,
-      "statusCode": null,
-      "contentType": null,
-      "durationMs": null,
-      "byteLength": null,
-      "attempts": 0,
-      "errorKind": null,
-      "errorMessage": null
+      "attempts": 0
     }
   ],
-  "robots": [
-    {
-      "origin": "http://127.0.0.1:9",
-      "statusCode": 200,
-      "outcome": "parsed",
-      "errorKind": null
-    }
-  ],
-  "counts": {
-    "reserved": 5,
-    "queued": 0,
-    "fetched": 4,
-    "ok": 2,
-    "skipped": 3,
-    "failed": 1
-  }
+  "counts": { "reserved": 5, "queued": 0, "fetched": 4, "ok": 2, "skipped": 3, "failed": 1 }
 }
 ```
 
+## Design highlights
+
+- **One queue, fixed workers.** No recursion, no module-level state; `concurrency` caps in-flight work.
+- **Reserve before fetch.** The `seen` check and the insert are one synchronous step; `maxPages` counts reservations.
+- **Commit in dequeue order.** Links are reserved in the order pages were taken, not the order they finished, so the same responses give the same `pages` for any `concurrency`.
+- **Every redirect hop is checked** for scope, loops, duplicates, trap guards, and robots before it is requested.
+- **Politeness is a second limit.** Per-origin FIFO leases and a gap between request starts; a larger `Crawl-delay` replaces it, capped at 10 seconds.
+- **An unreadable robots.txt closes the origin.** `429`, 5xx, or a network failure skips its pages as `robots-unavailable`.
+- **Failures are data.** Classified errors become records; retries back off; only unexpected exceptions stop the crawl.
+- **Traps and copies don't eat the budget.** Long URLs, deep paths, repeated segments, and identical HTML are skipped.
+
+The full contract is in [PLAN.md](PLAN.md); component boundaries are in [docs/Architecture.md](docs/Architecture.md).
+
 ## Known limitations
 
-- **No JavaScript rendering.** Links come from `<a href>` in the HTML body. The parser does not run scripts, so a URL that appears only after a script runs is never queued.
-- **No subdomain crawl.** Scope is the start origin: scheme, host, and port. `https://blog.example.com/` discovered from `https://example.com/` is `skipped` / `other-origin`.
-- **No sitemap crawl.** A `Sitemap` line in `robots.txt` is ignored. The crawl follows links from HTML.
-- **No resume.** The queue lives in the process. The first Ctrl+C prints the partial result. The next run starts again from the start URL.
-- **Single process.** One Node.js process runs `concurrency` async worker loops. There is no second machine and no separate job queue.
-- **UTF-8 decoding only.** Response bodies are decoded as UTF-8. A `charset` parameter does not select another decoder.
-- **`%FF` and `%FE` share one query key.** The query goes through `URLSearchParams`. Bytes that are not valid UTF-8 become U+FFFD, so `?q=%FF` and `?q=%FE` are both the key query `q=%EF%BF%BD`. In the path, `%7E` and `%7e` stay different.
-- **`nofollow` is not honored.** `rel="nofollow"`, `<meta name="robots">`, and `X-Robots-Tag` leave the queue unchanged. An `href` is reserved when the other rules allow it.
-- **A slow page delays later reservations.** Sequence 2 can finish while sequence 1 is still in flight. Its links stay in the buffer until sequence 1 commits. That wait is what keeps the `pages` array stable. The example is under [Links are reserved in dequeue order](#links-are-reserved-in-dequeue-order).
-- **One origin's backoff holds a worker.** A retry sleeps inside the HTTP client while that worker still holds the origin's lease. During the sleep the worker does not take another URL.
+- No JavaScript rendering; links come from `<a href>` in the HTML.
+- No subdomain crawl; scope is the start origin (scheme, host, port).
+- No sitemap crawl and no resume; one process, the queue lives in memory.
+- UTF-8 decoding only; a `charset` parameter does not select another decoder.
+- `rel="nofollow"`, `<meta name="robots">`, and `X-Robots-Tag` are not honored.
+- A slow page delays reservation of links from pages that finished after it.
+- A retry backoff holds its worker and the origin's lease.
 
-## Project structure
+## Docker
+
+```bash
+docker build -t webcrawler .
+docker run --rm webcrawler                # the fixture demo, as a non-root user
+docker run --rm --entrypoint node webcrawler backend/src/main.js https://example.com/ --depth 1 --max-pages 20
+```
+
+## Project layout
 
 ```
 webcrawler/
-├── backend/        # CLI and crawler engine
+├── backend/
 │   ├── src/
-│   └── tests/
-├── docs/           # Component boundaries. PLAN.md is the roadmap.
-├── PLAN.md
-└── package.json    # Root commands that delegate to backend/
+│   │   ├── cli/       # argument parsing, help, exit codes
+│   │   ├── crawler/   # frontier, URL policy, HTTP client, politeness, robots
+│   │   └── report/    # console, JSON, CSV
+│   └── tests/         # Jest suites; fixtures/ holds the local server and demo
+├── docs/Architecture.md
+├── Dockerfile
+├── PLAN.md            # roadmap and behavior contract
+└── package.json       # root commands that delegate to backend/
 ```
 
-## Getting started
-
-### Prerequisites
-
-- Node.js 24, listed in `backend/.nvmrc`
-
-```bash
-cd backend
-nvm use
-```
-
-### Install and test
-
-```bash
-npm install --prefix backend
-npm test
-```
-
-`npm test` from the repository root runs the backend Jest suite. `npm run lint` runs ESLint. `npm run verify` runs lint, then tests.
-
-## Dependencies
-
-| Package | Purpose |
-|---|---|
-| `jsdom` | HTML parsing and link extraction |
-| `robots-parser` | Allow and crawl-delay decisions for `robots.txt` |
-| `jest` | Testing framework (dev dependency) |
-| `eslint` | Linter (dev dependency) |
+Built with `jsdom` (link extraction) and `robots-parser`; tested with Jest, linted with ESLint, CI in `.github/workflows/ci.yml`.
 
 ## Author
 
