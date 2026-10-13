@@ -897,6 +897,45 @@ describe("fixture crawl", () => {
     });
   });
 
+  test("pagination keeps the page links when canonical points at the list", async () => {
+    await withServer(
+      {
+        "/list": (req, res) => {
+          const requestUrl = new URL(req.url, "http://127.0.0.1");
+          const body =
+            requestUrl.searchParams.get("page") === "2"
+              ? '<link rel="canonical" href="/list"><a href="/item-5"></a>'
+              : '<a href="/list?page=2"></a>';
+          res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+          res.end(body);
+        },
+        "/item-5": html("<p>item</p>"),
+      },
+      async (server) => {
+        const result = await crawl(
+          {
+            startUrl: `${server.origin}/list`,
+            maxDepth: 2,
+            maxPages: 10,
+            concurrency: 1,
+            minIntervalMs: 0,
+          },
+          { clock }
+        );
+        const pageTwo = result.pages.find((page) => page.canonicalUrl.endsWith("/list?page=2"));
+        const item = result.pages.find((page) => new URL(page.canonicalUrl).pathname === "/item-5");
+
+        expect(pageTwo.skipReason).toBe("canonical");
+        expect(item.state).toBe("ok");
+        expect(item.discoveredFrom).toBe(`${server.origin}/list?page=2`);
+        const listPages = result.pages.filter(
+          (page) => new URL(page.canonicalUrl).pathname === "/list" && !page.canonicalUrl.includes("?")
+        );
+        expect(listPages).toHaveLength(1);
+      }
+    );
+  });
+
   test("a shared fixture body is duplicate-content once a canonical copy has committed", async () => {
     const shared = '<link rel="canonical" href="/canon"><a href="/own"></a>';
     const routes = {
@@ -909,12 +948,13 @@ describe("fixture crawl", () => {
 
     await withServer(routes, async (server) => {
       const result = await crawlOrigin(server, { maxDepth: 2, maxPages: 10, concurrency: 1 });
-      expect(paths(server)).toEqual(["/robots.txt", "/", "/a", "/b", "/canon"]);
+      expect(paths(server)).toEqual(["/robots.txt", "/", "/a", "/b", "/canon", "/own"]);
       expect(result.pages.map((page) => [new URL(page.canonicalUrl).pathname, page.skipReason])).toEqual([
         ["/", null],
         ["/a", "canonical"],
         ["/b", "duplicate-content"],
         ["/canon", null],
+        ["/own", null],
       ]);
       expect(result.pages.find((page) => page.canonicalUrl.endsWith("/canon")).discoveredFrom).toBe(`${server.origin}/a`);
     });

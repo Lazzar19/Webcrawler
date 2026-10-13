@@ -34,7 +34,7 @@ the documented behavior.
 | 8 | Crawler-trap guards | `--max-url-length`, `--max-path-depth`, `--max-segment-repeats`, checked before `maxPages` |
 | 9 | Content identity | SHA-256 body dedupe (`duplicate-content`) and `rel=canonical` following, each with an off switch |
 
-Verification: `npm run verify` (ESLint, then Jest; 369 tests at completion) runs locally and in
+Verification: `npm run verify` (ESLint, then Jest; 370 tests at completion) runs locally and in
 `.github/workflows/ci.yml` on the Node version in `backend/.nvmrc`.
 
 ## Key design decisions
@@ -45,6 +45,7 @@ Details are in the README's [Design highlights](README.md#design-highlights) and
 - **One queue, fixed workers:** `concurrency` worker loops over one FIFO frontier; no recursion, no module-level state.
 - **Reserve before fetch:** the `seen` check and insert are one synchronous step; `maxPages` counts reservations.
 - **Commit in dequeue order:** links are reserved in take order, so results are identical for any `concurrency`.
+- **A canonical tag does not hide the page's links.** The page stays `skipped` / `canonical`, its own links are reserved as usual, and the target is reserved at the same depth through the usual origin, depth, trap, and page-limit checks. Robots applies when that target is fetched. Another origin or an unparsable href is ignored.
 - **Key vs. spelling:** the canonical key decides identity; the request uses the first reserved spelling.
 - **Redirects in the worker:** each hop is checked for scope, loops, duplicates, traps, and robots before it is requested.
 - **Politeness is separate from concurrency:** per-origin FIFO leases plus a minimum gap; a larger `Crawl-delay` replaces it, capped at 10 s.
@@ -57,9 +58,6 @@ Details are in the README's [Design highlights](README.md#design-highlights) and
 
 None of these are planned. They are recorded so they are not mistaken for oversights.
 
-- **Canonical default:** `rel=canonical` is followed by default, and a page whose canonical points elsewhere
-  reserves none of its own links. On sites that canonicalize pagination or tracking URLs this can hide whole
-  sections. Safer options: keep following the page's links, or default `--no-canonical`.
 - **Byte counting and charset:** the size limit and `byteLength` count UTF-8 bytes of the decoded text, not
   bytes received, and bodies are always decoded as UTF-8. Fix: count raw chunk bytes, decode by the
   `Content-Type` charset or `<meta charset>`, and hash raw bytes for dedupe.

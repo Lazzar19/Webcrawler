@@ -173,7 +173,7 @@ test("--no-dedupe-content leaves both copies ok and still reserves the link", as
 
 const aliasBody = '<link rel="canonical" href="/target"><a href="/own"></a>';
 
-test("a declared canonical is reserved at the same depth and the page links are not", async () => {
+test("a declared canonical is reserved at the same depth and the page links stay", async () => {
   const discovered = [];
   const { http, result } = crawlSite(
     {
@@ -205,7 +205,8 @@ test("a declared canonical is reserved at the same depth and the page links are 
   expect(target.state).toBe("ok");
   expect(target.depth).toBe(1);
   expect(target.discoveredFrom).toBe("https://example.com/alias");
-  expect(crawlResult.pages.some((page) => page.canonicalUrl.endsWith("/own"))).toBe(false);
+  expect(pageAt(crawlResult, "/own").skipReason).toBe("depth-limit");
+  expect(pageAt(crawlResult, "/own").discoveredFrom).toBe("https://example.com/alias");
   expect(http.requested).toEqual([
     "https://example.com/",
     "https://example.com/alias",
@@ -256,8 +257,9 @@ test("the first canonical token wins, and a base href resolves it", async () => 
   expect(pageAt(crawlResult, "/").skipReason).toBe("canonical");
   expect(pageAt(crawlResult, "/docs/a").discoveredFrom).toBe("https://example.com/");
   expect(pageAt(crawlResult, "/docs/a").depth).toBe(0);
+  expect(pageAt(crawlResult, "/docs/b").discoveredFrom).toBe("https://example.com/");
+  expect(pageAt(crawlResult, "/docs/b").depth).toBe(1);
   expect(crawlResult.pages.some((page) => page.canonicalUrl.endsWith("/second"))).toBe(false);
-  expect(crawlResult.pages.some((page) => page.canonicalUrl.endsWith("/docs/b"))).toBe(false);
 });
 
 test("a canonical target still faces traps and maxPages", async () => {
@@ -271,7 +273,8 @@ test("a canonical target still faces traps and maxPages", async () => {
   const trapResult = await trapped.result;
   expect(pageAt(trapResult, "/").skipReason).toBe("canonical");
   expect(pageAt(trapResult, "/a/b").skipReason).toBe("path-depth");
-  expect(trapped.http.requested).toEqual(["https://example.com/"]);
+  expect(pageAt(trapResult, "/own").state).toBe("ok");
+  expect(trapped.http.requested).toEqual(["https://example.com/", "https://example.com/own"]);
 
   const capped = await crawlSite(
     {
@@ -283,7 +286,7 @@ test("a canonical target still faces traps and maxPages", async () => {
   const capResult = await capped.result;
   expect(pageAt(capResult, "/alias").skipReason).toBe("canonical");
   expect(pageAt(capResult, "/target").skipReason).toBe("page-limit");
-  expect(capResult.pages.some((page) => page.canonicalUrl.endsWith("/own"))).toBe(false);
+  expect(pageAt(capResult, "/own").skipReason).toBe("page-limit");
 });
 
 test("a canonical key that is already seen is not reserved again", async () => {
@@ -295,8 +298,12 @@ test("a canonical key that is already seen is not reserved again", async () => {
 
   expect(pageAt(crawlResult, "/alias").skipReason).toBe("canonical");
   expect(crawlResult.pages.filter((page) => page.canonicalUrl === "https://example.com/")).toHaveLength(1);
-  expect(crawlResult.pages.some((page) => page.canonicalUrl.endsWith("/other"))).toBe(false);
-  expect(http.requested).toEqual(["https://example.com/", "https://example.com/alias"]);
+  expect(pageAt(crawlResult, "/other").discoveredFrom).toBe("https://example.com/alias");
+  expect(http.requested).toEqual([
+    "https://example.com/",
+    "https://example.com/alias",
+    "https://example.com/other",
+  ]);
 });
 
 test("duplicate-content wins over a canonical tag on the later copy", async () => {
@@ -314,7 +321,7 @@ test("duplicate-content wins over a canonical tag on the later copy", async () =
   expect(pageAt(crawlResult, "/b").skipReason).toBe("duplicate-content");
   expect(pageAt(crawlResult, "/canon").discoveredFrom).toBe("https://example.com/a");
   expect(crawlResult.pages.filter((page) => page.canonicalUrl.endsWith("/canon"))).toHaveLength(1);
-  expect(crawlResult.pages.some((page) => page.canonicalUrl.endsWith("/own"))).toBe(false);
+  expect(pageAt(crawlResult, "/own").discoveredFrom).toBe("https://example.com/a");
 });
 
 test("--no-canonical reserves the page links and does not discover the target", async () => {

@@ -221,7 +221,6 @@ function createFrontier({ config, clock, onFatal, trace }) {
       }
       item.page.state = "skipped";
       item.page.skipReason = "canonical";
-      item.links = [];
       return;
     }
     if (hash != null) {

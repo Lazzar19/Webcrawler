@@ -27,7 +27,7 @@ function formatHelp() {
     row("--user-agent <text>", "User-Agent header. It must not contain a control character."),
     row("--no-respect-robots", "Do not fetch robots.txt. The default reads it and fails closed when it cannot."),
     row("--no-dedupe-content", "Keep reserving links from a repeated HTML body. The default skips the later copy."),
-    row("--no-canonical", "Do not follow rel=canonical. The default reserves that target at the same depth."),
+    row("--no-canonical", "Do not follow rel=canonical. The default still follows the page's links and reserves the target at the same depth."),
     "",
     "Output",
     row("--format <name>", "console, json, or csv. Default console. json and csv go to stdout, the summary to stderr."),
